@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Historical Data Analyzer & AI Assistant</title>
+    <script>
+      window.addEventListener('error', function(e) {
+        var errDiv = document.createElement('div');
+        errDiv.style.position = 'fixed';
+        errDiv.style.top = '0';
+        errDiv.style.left = '0';
+        errDiv.style.width = '100vw';
+        errDiv.style.height = '100vh';
+        errDiv.style.backgroundColor = '#09090b';
+        errDiv.style.color = '#f87171';
+        errDiv.style.padding = '30px';
+        errDiv.style.fontFamily = 'monospace';
+        errDiv.style.fontSize = '14px';
+        errDiv.style.zIndex = '999999';
+        errDiv.style.boxSizing = 'border-box';
+        errDiv.style.overflow = 'auto';
+        errDiv.innerHTML = '<h2 style="color:#ef4444;margin-bottom:15px;">🔴 Client-Side Javascript Error Captured:</h2>' +
+          '<p><strong>Message:</strong> ' + e.message + '</p>' +
+          '<p><strong>Source:</strong> ' + e.filename + ':' + e.lineno + ':' + e.colno + '</p>' +
+          '<pre style="background:#18181b; padding:15px; border-radius:6px; border:1px solid #27272a; margin-top:20px; overflow-x:auto;">' + 
+          (e.error ? e.error.stack : 'No stack trace available') + 
+          '</pre>';
+        document.body.appendChild(errDiv);
+      });
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
