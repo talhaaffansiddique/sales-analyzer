@@ -80,7 +80,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('overview');
   const [transactions, setTransactions] = useState(compiledData.transactions);
   const [stats, setStats] = useState(compiledData.stats);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isChartBuilderEnabled, setIsChartBuilderEnabled] = useState(false);
   
   // Table filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -623,7 +624,7 @@ Answer the user's question accurately using the data above. Be direct, professio
   };
 
   const callGeminiAPI = async (key, prompt, systemInstruction) => {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
@@ -920,17 +921,20 @@ Answer the user's question accurately using the data above. Be direct, professio
               <h2>Historical Report (2009 - 2021)</h2>
               <p>Corporate Sales Summary & Data Intelligence Dashboard</p>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <span className="badge-year" style={{ padding: '8px 14px', fontSize: '0.85rem' }}>
                 Cornell International DMCC
               </span>
-              <button 
-                onClick={handleLogout}
-                className="btn-secondary"
-                style={{ padding: '8px 14px', fontSize: '0.85rem', cursor: 'pointer' }}
-              >
-                Logout (Captain)
-              </button>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                <button 
+                  onClick={handleLogout}
+                  className="btn-secondary"
+                  style={{ padding: '8px 14px', fontSize: '0.85rem', cursor: 'pointer' }}
+                >
+                  Logout (Captain)
+                </button>
+                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>v 1.1</span>
+              </div>
             </div>
           </div>
 
@@ -949,7 +953,13 @@ Answer the user's question accurately using the data above. Be direct, professio
             </button>
             <button 
               className={`tab-btn ${activeTab === 'charts' ? 'active' : ''}`}
-              onClick={() => setActiveTab('charts')}
+              onClick={() => isChartBuilderEnabled && setActiveTab('charts')}
+              disabled={!isChartBuilderEnabled}
+              style={{
+                opacity: isChartBuilderEnabled ? 1 : 0.4,
+                cursor: isChartBuilderEnabled ? 'pointer' : 'not-allowed'
+              }}
+              title={isChartBuilderEnabled ? 'Dynamic Chart Builder' : 'Click "Show on Dynamic Chart" in Table View to enable'}
             >
               Dynamic Chart Builder
             </button>
@@ -1213,13 +1223,26 @@ Answer the user's question accurately using the data above. Be direct, professio
                     </div>
                   </div>
 
-                  <button 
-                    onClick={handleExportExcel}
-                    className="btn-secondary"
-                    style={{ marginLeft: 'auto', padding: '12px 18px', gap: '8px' }}
-                  >
-                    <FileSpreadsheet size={16} color="#10b981" /> Export Excel
-                  </button>
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                    <button 
+                      onClick={handleExportExcel}
+                      className="btn-secondary"
+                      style={{ padding: '12px 18px', gap: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <FileSpreadsheet size={16} color="#10b981" /> Export Excel
+                    </button>
+
+                    <button 
+                      onClick={() => {
+                        setIsChartBuilderEnabled(true);
+                        setActiveTab('charts');
+                      }}
+                      className="btn-primary"
+                      style={{ padding: '12px 18px', gap: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                    >
+                      <BarChart3 size={16} /> Show on Dynamic Chart
+                    </button>
+                  </div>
                 </div>
 
                 {/* Selected Products Chips */}
