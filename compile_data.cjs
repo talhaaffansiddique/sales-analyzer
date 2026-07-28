@@ -52,21 +52,25 @@ try {
   const companies = [];
   const products = [];
   const companyMap = {};
-  
+
+  // Collapse stray whitespace/tabs from the source spreadsheet so the same
+  // company/product/formulation isn't treated as multiple distinct values.
+  const cleanStr = (v) => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : v;
+
   let currentCompany = null;
   let currentRef = null;
-  
+
   for (let r = 6; r < rawRows.length; r++) {
     const row = rawRows[r];
     if (!row || row.length === 0 || (row[0] === null && row[1] === null && row[3] === null)) {
       continue;
     }
-    
+
     const sNo = row[0];
-    const companyName = row[1];
+    const companyName = cleanStr(row[1]);
     const refNo = row[2];
-    const productName = row[3];
-    const formulation = row[71]; // Col 71
+    const productName = cleanStr(row[3]);
+    const formulation = cleanStr(row[71]); // Col 71
     
     // Check if it's a total row
     const isTotalRow = (sNo === null || sNo === undefined) && 
@@ -199,6 +203,7 @@ try {
     },
     companies: companies.slice(0, 100), // top 100 companies by sales to keep JSON size optimized
     allCompanyNames: companies.map(c => c.name), // list of all company names for dropdowns
+    allProductNames: products, // list of all unique product names for lookups
     topProducts,
     transactions: transactions // all 8,929 transactions (very small JSON size, ~500kb)
   };

@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { Line, Bar, Pie } from 'react-chartjs-2';
 import * as XLSX from 'xlsx';
+import Anthropic from '@anthropic-ai/sdk';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -69,6 +70,151 @@ const formatNumber = (val) => {
   return num.toLocaleString(undefined, { maximumFractionDigits: 0 });
 };
 
+const cleanStr = (v) => typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : v;
+
+// Wide-format parser: mirrors compile_data.cjs's layout for the original
+// "Historical Report 2009-2021" spreadsheet shape (one qty/value column block
+// per year, data starting row 6). Only re-parses files with that exact shape
+// (e.g. a corrected or re-exported copy of the original report) — it does not
+// know how to locate columns for years outside 2009-2021.
+const WIDE_FORMAT_YEARS = [2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021];
+const WIDE_FORMAT_PROD_YEAR_COLS = {
+  2009: { qty: 5, val: 6, vat: null },
+  2010: { qty: 10, val: 11, vat: null },
+  2011: { qty: 15, val: 16, vat: null },
+  2012: { qty: 20, val: 21, vat: null },
+  2013: { qty: 25, val: 26, vat: null },
+  2014: { qty: 30, val: 31, vat: null },
+  2015: { qty: 35, val: 36, vat: null },
+  2016: { qty: 40, val: 41, vat: null },
+  2017: { qty: 45, val: 46, vat: null },
+  2018: { qty: 50, val: 51, vat: 52 },
+  2019: { qty: 57, val: 58, vat: 59 },
+  2020: { qty: 64, val: 65, vat: 66 },
+  2021: { qty: 72, val: 73, vat: 74 }
+};
+
+const looksLikeWideFormatReport = (rawRows) => {
+  if (!rawRows || rawRows.length < 8) return false;
+  // Scan the first ~30 data rows for at least one with a company or product name
+  // in the expected columns, confirming this matches the original report layout.
+  for (let r = 6; r < Math.min(rawRows.length, 36); r++) {
+    const row = rawRows[r];
+    if (row && (row[1] || row[3])) return true;
+  }
+  return false;
+};
+
+const parseWideFormatRows = (rawRows) => {
+  const transactions = [];
+  let currentCompany = null;
+  let currentRef = null;
+
+  for (let r = 6; r < rawRows.length; r++) {
+    const row = rawRows[r];
+    if (!row || row.length === 0 || (row[0] === null && row[1] === null && row[3] === null)) {
+      continue;
+    }
+
+    const companyName = cleanStr(row[1]);
+    const refNo = row[2];
+    const productName = cleanStr(row[3]);
+    const formulation = cleanStr(row[71]);
+
+    const isTotalRow = !row[0] && !companyName && !productName;
+    if (isTotalRow) continue;
+
+    if (companyName) {
+      currentCompany = companyName;
+      currentRef = refNo || currentRef;
+    }
+
+    if (productName && String(productName).trim().toUpperCase() !== 'GRAND TOTAL' && currentCompany) {
+      WIDE_FORMAT_YEARS.forEach(yr => {
+        const colMap = WIDE_FORMAT_PROD_YEAR_COLS[yr];
+        const qty = Number(row[colMap.qty]) || 0;
+        const val = Number(row[colMap.val]) || 0;
+        const vat = colMap.vat ? (Number(row[colMap.vat]) || 0) : null;
+
+        if (qty > 0 || val > 0) {
+          transactions.push({
+            company: currentCompany,
+            ref: currentRef,
+            product: productName,
+            formulation: formulation || 'N/A',
+            year: yr,
+            qty,
+            sales: val,
+            salesWithVat: vat !== null ? vat : val
+          });
+        }
+      });
+    }
+  }
+
+  return transactions;
+};
+
+// Tidy CSV parser: expects one row per transaction with the same column
+// headers the app's own "Export Excel" produces, so an exported-then-edited
+// file round-trips cleanly. Header matching is case-insensitive and tolerant
+// of a few common aliases.
+const TIDY_HEADER_ALIASES = {
+  company: ['company name', 'company'],
+  ref: ['ref code', 'ref', 'reference'],
+  product: ['product'],
+  formulation: ['formulation'],
+  year: ['year'],
+  qty: ['quantity', 'qty'],
+  sales: ['sales value (aed)', 'sales', 'sales value'],
+  salesWithVat: ['sales with vat (aed)', 'sales with vat', 'salesv with vat']
+};
+
+const looksLikeTidyCsv = (rawRows) => {
+  if (!rawRows || rawRows.length < 1) return false;
+  const header = (rawRows[0] || []).map(h => cleanStr(String(h || '')).toLowerCase());
+  const hasCompany = TIDY_HEADER_ALIASES.company.some(a => header.includes(a));
+  const hasProduct = TIDY_HEADER_ALIASES.product.some(a => header.includes(a));
+  const hasYear = TIDY_HEADER_ALIASES.year.some(a => header.includes(a));
+  return hasCompany && hasProduct && hasYear;
+};
+
+const parseTidyCsvRows = (rawRows) => {
+  const header = (rawRows[0] || []).map(h => cleanStr(String(h || '')).toLowerCase());
+  const colIndex = {};
+  Object.keys(TIDY_HEADER_ALIASES).forEach(field => {
+    const idx = header.findIndex(h => TIDY_HEADER_ALIASES[field].includes(h));
+    colIndex[field] = idx;
+  });
+
+  const transactions = [];
+  for (let r = 1; r < rawRows.length; r++) {
+    const row = rawRows[r];
+    if (!row || row.length === 0) continue;
+    const company = colIndex.company >= 0 ? cleanStr(row[colIndex.company]) : null;
+    const product = colIndex.product >= 0 ? cleanStr(row[colIndex.product]) : null;
+    const year = colIndex.year >= 0 ? Number(row[colIndex.year]) : null;
+    if (!company || !product || !year) continue;
+
+    const qty = colIndex.qty >= 0 ? Number(row[colIndex.qty]) || 0 : 0;
+    const sales = colIndex.sales >= 0 ? Number(row[colIndex.sales]) || 0 : 0;
+    const salesWithVatRaw = colIndex.salesWithVat >= 0 ? Number(row[colIndex.salesWithVat]) : NaN;
+
+    transactions.push({
+      company,
+      ref: colIndex.ref >= 0 ? cleanStr(row[colIndex.ref]) : null,
+      product,
+      formulation: colIndex.formulation >= 0 ? (cleanStr(row[colIndex.formulation]) || 'N/A') : 'N/A',
+      year,
+      qty,
+      sales,
+      salesWithVat: !isNaN(salesWithVatRaw) ? salesWithVatRaw : sales
+    });
+  }
+
+  return transactions;
+};
+
 export default function App() {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState(sessionStorage.getItem('cornell_authenticated') === 'true');
@@ -79,10 +225,13 @@ export default function App() {
   // App states
   const [activeTab, setActiveTab] = useState('overview');
   const [transactions, setTransactions] = useState(compiledData.transactions);
-  const [stats, setStats] = useState(compiledData.stats);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isChartBuilderEnabled, setIsChartBuilderEnabled] = useState(false);
-  
+
+  // Overview dashboard year filter
+  const [overviewFromYear, setOverviewFromYear] = useState(2009);
+  const [overviewToYear, setOverviewToYear] = useState(2021);
+
   // Table filters
   const [searchTerm, setSearchTerm] = useState('');
   const [fromYear, setFromYear] = useState(2009);
@@ -102,15 +251,37 @@ export default function App() {
   const [chartLimit, setChartLimit] = useState('10');
 
   // AI Chat states
-  const [messages, setMessages] = useState([
-    {
-      sender: 'ai',
-      text: "Hello! I am your AI Data Assistant. I have analyzed **Historical Report 2009-2021 (1).xls**.\n\nYou can ask me questions about this dataset, such as which companies have the highest sales, sales trends by year, or product performance. Enter a Gemini API Key in the settings above to unlock advanced natural language questions!",
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  const getWelcomeMessage = () => ({
+    sender: 'ai',
+    text: "Hello! I am your AI Data Assistant. I have analyzed **Historical Report 2009-2021 (1).xls**.\n\nYou can ask me questions about this dataset, such as which companies have the highest sales, sales trends by year, or product performance. Type \"help\" to see everything I can do, or enter a Gemini API Key in the settings above to unlock advanced natural language questions!",
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  });
+  const [messages, setMessages] = useState(() => {
+    try {
+      const saved = localStorage.getItem('cornell_chat_history');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      // Ignore corrupt saved history and fall back to the welcome message
     }
-  ]);
+    return [getWelcomeMessage()];
+  });
+
+  // Persist chat history across reloads
+  useEffect(() => {
+    localStorage.setItem('cornell_chat_history', JSON.stringify(messages));
+  }, [messages]);
+
+  const handleClearChat = () => {
+    const fresh = [getWelcomeMessage()];
+    setMessages(fresh);
+  };
   const [chatInput, setChatInput] = useState('');
+  const [aiProvider, setAiProvider] = useState(localStorage.getItem('ai_provider') || 'gemini');
   const [apiKey, setApiKey] = useState(localStorage.getItem('gemini_api_key') || '');
+  const [claudeApiKey, setClaudeApiKey] = useState(localStorage.getItem('claude_api_key') || '');
   const [showApiSettings, setShowApiSettings] = useState(false);
   const [isAiTyping, setIsAiTyping] = useState(false);
   const chatEndRef = useRef(null);
@@ -142,43 +313,98 @@ export default function App() {
     sessionStorage.removeItem('cornell_authenticated');
   };
 
-  // Save API Key
+  // Save API Key (provider-aware: Gemini or Claude)
   const handleSaveApiKey = (e) => {
     e.preventDefault();
-    localStorage.setItem('gemini_api_key', apiKey);
+    localStorage.setItem('ai_provider', aiProvider);
+    const activeKey = aiProvider === 'claude' ? claudeApiKey : apiKey;
+    if (aiProvider === 'claude') {
+      localStorage.setItem('claude_api_key', claudeApiKey);
+    } else {
+      localStorage.setItem('gemini_api_key', apiKey);
+    }
     setShowApiSettings(false);
+    const providerName = aiProvider === 'claude' ? 'Claude' : 'Gemini';
     setMessages(prev => [
       ...prev,
       {
         sender: 'ai',
-        text: apiKey 
-          ? "✅ **Gemini API Key saved successfully!** You can now ask complex questions and request deep business analysis on your dataset."
-          : "⚠️ **Gemini API Key removed.** Chat will now run in offline local query mode.",
+        text: activeKey
+          ? `✅ **${providerName} API Key saved successfully!** You can now ask complex questions and request deep business analysis on your dataset.`
+          : `⚠️ **${providerName} API Key removed.** Chat will now run in offline local query mode.`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }
     ]);
   };
 
-  // Get filter list options
+  // Get filter list options (reactive to imported/live transactions)
   const formulationOptions = useMemo(() => {
     const formulations = new Set();
-    compiledData.transactions.forEach(t => {
+    transactions.forEach(t => {
       if (t.formulation && t.formulation !== 'N/A') {
         formulations.add(t.formulation);
       }
     });
     return ['All', 'N/A', ...Array.from(formulations).sort()];
-  }, []);
+  }, [transactions]);
 
   const uniqueProductsList = useMemo(() => {
     const productsSet = new Set();
-    compiledData.transactions.forEach(t => {
+    transactions.forEach(t => {
       productsSet.add(t.product);
     });
     return Array.from(productsSet).sort();
-  }, []);
+  }, [transactions]);
 
-  const yearsList = [2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021];
+  const yearsList = useMemo(() => {
+    const yearsSet = new Set(transactions.map(t => t.year));
+    return Array.from(yearsSet).sort((a, b) => a - b);
+  }, [transactions]);
+
+  // Full dataset stats, recomputed whenever transactions change (e.g. after an import)
+  const globalStats = useMemo(() => {
+    let totalSalesAED = 0;
+    let totalQty = 0;
+    const salesByYear = {};
+    const qtyByYear = {};
+    const companyMap = {};
+    const productMap = {};
+
+    transactions.forEach(t => {
+      totalSalesAED += t.sales;
+      totalQty += t.qty;
+      salesByYear[t.year] = (salesByYear[t.year] || 0) + t.sales;
+      qtyByYear[t.year] = (qtyByYear[t.year] || 0) + t.qty;
+
+      if (!companyMap[t.company]) {
+        companyMap[t.company] = { name: t.company, ref: t.ref, totalSales: 0, totalQty: 0 };
+      }
+      companyMap[t.company].totalSales += t.sales;
+      companyMap[t.company].totalQty += t.qty;
+
+      if (!productMap[t.product]) {
+        productMap[t.product] = { product: t.product, sales: 0, qty: 0 };
+      }
+      productMap[t.product].sales += t.sales;
+      productMap[t.product].qty += t.qty;
+    });
+
+    const companies = Object.values(companyMap).sort((a, b) => b.totalSales - a.totalSales);
+    const topProducts = Object.values(productMap).sort((a, b) => b.sales - a.sales).slice(0, 20);
+
+    return {
+      totalSalesAED,
+      totalQty,
+      companyCount: companies.length,
+      productCount: Object.keys(productMap).length,
+      salesByYear,
+      qtyByYear,
+      topProducts,
+      companies,
+      allCompanyNames: companies.map(c => c.name),
+      allProductNames: Object.keys(productMap)
+    };
+  }, [transactions]);
 
   // Process table data (Search + Filters + Sort)
   const filteredAndSortedTransactions = useMemo(() => {
@@ -288,16 +514,166 @@ export default function App() {
     XLSX.writeFile(workbook, 'Cornell_Sales_Filtered_Export.xlsx');
   };
 
+  // Import a new Excel/CSV file — detects whether it's the original wide report
+  // shape or the app's own tidy export-column shape, parses it client-side, and
+  // upserts the resulting rows into the live dataset (keyed on company+product+year).
+  const importFileInputRef = useRef(null);
+  const [importStatus, setImportStatus] = useState(null); // { type: 'success' | 'error', text }
+
+  const resetYearFilters = (minYear, maxYear) => {
+    setOverviewFromYear(minYear);
+    setOverviewToYear(maxYear);
+    setFromYear(minYear);
+    setToYear(maxYear);
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ''; // allow re-selecting the same file later
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rawRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+
+        let imported;
+        let formatLabel;
+        if (looksLikeTidyCsv(rawRows)) {
+          imported = parseTidyCsvRows(rawRows);
+          formatLabel = 'tidy CSV template';
+        } else if (looksLikeWideFormatReport(rawRows)) {
+          imported = parseWideFormatRows(rawRows);
+          formatLabel = 'original wide report format';
+        } else {
+          throw new Error('Unrecognized file format. Use either the tidy CSV template (Company, Product, Year, Quantity, Sales... columns) or a file shaped like the original Historical Report spreadsheet.');
+        }
+
+        if (imported.length === 0) {
+          throw new Error('No transaction rows were found in this file.');
+        }
+
+        const keyOf = (t) => `${t.company}|${t.product}|${t.year}`;
+        const merged = [...transactions];
+        const indexByKey = new Map(merged.map((t, i) => [keyOf(t), i]));
+        let addedCount = 0;
+        let updatedCount = 0;
+
+        imported.forEach(t => {
+          const k = keyOf(t);
+          if (indexByKey.has(k)) {
+            merged[indexByKey.get(k)] = t;
+            updatedCount++;
+          } else {
+            merged.push(t);
+            indexByKey.set(k, merged.length - 1);
+            addedCount++;
+          }
+        });
+
+        setTransactions(merged);
+
+        const mergedYears = merged.map(t => t.year);
+        resetYearFilters(Math.min(...mergedYears), Math.max(...mergedYears));
+
+        const summary = `✅ **Import complete** (${formatLabel}, from "${file.name}"): ${addedCount.toLocaleString()} new rows added, ${updatedCount.toLocaleString()} existing rows updated.`;
+        setImportStatus({ type: 'success', text: summary });
+        setMessages(prev => [
+          ...prev,
+          { sender: 'ai', text: summary, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+        ]);
+      } catch (err) {
+        console.error(err);
+        const errorText = `❌ **Import failed:** ${err.message || 'Could not parse this file.'}`;
+        setImportStatus({ type: 'error', text: errorText });
+        setMessages(prev => [
+          ...prev,
+          { sender: 'ai', text: errorText, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+        ]);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleReloadOriginalData = () => {
+    setTransactions(compiledData.transactions);
+    resetYearFilters(2009, 2021);
+    setImportStatus(null);
+    setMessages(prev => [
+      ...prev,
+      { sender: 'ai', text: '↺ **Dataset reset** to the original bundled Historical Report (2009-2021).', timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+    ]);
+  };
+
+  // Aggregate stats for the Overview dashboard, recomputed for the selected year range.
+  // Falls back to the already-computed globalStats when the full range is selected (no extra work needed).
+  const overviewStats = useMemo(() => {
+    const minYear = yearsList[0];
+    const maxYear = yearsList[yearsList.length - 1];
+    if (overviewFromYear <= minYear && overviewToYear >= maxYear) {
+      return globalStats;
+    }
+
+    const filteredTx = transactions.filter(
+      t => t.year >= overviewFromYear && t.year <= overviewToYear
+    );
+
+    let totalSalesAED = 0;
+    let totalQty = 0;
+    const salesByYear = {};
+    const qtyByYear = {};
+    yearsList.forEach(yr => { salesByYear[yr] = 0; qtyByYear[yr] = 0; });
+
+    const companyMap = {};
+    const productMap = {};
+
+    filteredTx.forEach(t => {
+      totalSalesAED += t.sales;
+      totalQty += t.qty;
+      salesByYear[t.year] += t.sales;
+      qtyByYear[t.year] += t.qty;
+
+      if (!companyMap[t.company]) {
+        companyMap[t.company] = { name: t.company, ref: t.ref, totalSales: 0, totalQty: 0 };
+      }
+      companyMap[t.company].totalSales += t.sales;
+      companyMap[t.company].totalQty += t.qty;
+
+      if (!productMap[t.product]) {
+        productMap[t.product] = { product: t.product, sales: 0, qty: 0 };
+      }
+      productMap[t.product].sales += t.sales;
+      productMap[t.product].qty += t.qty;
+    });
+
+    const companies = Object.values(companyMap).sort((a, b) => b.totalSales - a.totalSales);
+    const topProducts = Object.values(productMap).sort((a, b) => b.sales - a.sales).slice(0, 20);
+
+    return {
+      totalSalesAED,
+      totalQty,
+      companyCount: companies.length,
+      productCount: Object.keys(productMap).length,
+      salesByYear,
+      qtyByYear,
+      topProducts,
+      companies
+    };
+  }, [overviewFromYear, overviewToYear, transactions, globalStats, yearsList]);
+
   // Top Companies list for Overview Tab
   const topCompanies = useMemo(() => {
-    return compiledData.companies.slice(0, 5);
-  }, []);
+    return overviewStats.companies.slice(0, 5);
+  }, [overviewStats]);
 
   // Overview Main Chart Data (Sales & Qty over years)
   const overviewChartData = useMemo(() => {
-    const sortedYears = [...yearsList].sort();
-    const salesData = sortedYears.map(yr => stats.salesByYear[yr] || 0);
-    const qtyData = sortedYears.map(yr => stats.qtyByYear[yr] || 0);
+    const sortedYears = [...yearsList].filter(yr => yr >= overviewFromYear && yr <= overviewToYear).sort();
+    const salesData = sortedYears.map(yr => overviewStats.salesByYear[yr] || 0);
+    const qtyData = sortedYears.map(yr => overviewStats.qtyByYear[yr] || 0);
 
     return {
       labels: sortedYears,
@@ -324,7 +700,7 @@ export default function App() {
         }
       ]
     };
-  }, [stats]);
+  }, [overviewStats, overviewFromYear, overviewToYear]);
 
   const overviewChartOptions = {
     responsive: true,
@@ -375,7 +751,7 @@ export default function App() {
 
   // Top Products Chart Data
   const topProductsChartData = useMemo(() => {
-    const list = stats.topProducts.slice(0, 7);
+    const list = overviewStats.topProducts.slice(0, 7);
     return {
       labels: list.map(p => p.product.substring(0, 15) + (p.product.length > 15 ? '...' : '')),
       datasets: [
@@ -396,7 +772,7 @@ export default function App() {
         }
       ]
     };
-  }, [stats]);
+  }, [overviewStats]);
 
   // Process data for Chart Builder
   const builderChartData = useMemo(() => {
@@ -459,40 +835,100 @@ export default function App() {
   // AI local engine query parser
   const runLocalAIQuery = (query) => {
     const q = query.toLowerCase().trim();
-    
+
+    // Help / capability listing
+    if (q === 'help' || q.includes('what can you do') || q.includes('what can i ask') || q.includes('what questions can')) {
+      return `🤖 **Here's what I can answer offline (no API key needed):**\n- "Top products" / "Top companies"\n- "Total sales" / "How many companies/products"\n- "Show sales in 2018" (any year 2009-2021)\n- "Compare 2020 and 2021" (or compare two companies/products)\n- "Sales trend" / "Growth by year"\n- Ask about a specific company or product by name and I'll pull its full sales history\n\nFor open-ended analysis, add a **Gemini API Key** in settings.`;
+    }
+
+    // Comparison queries: "compare X and Y" / "X vs Y"
+    if (q.includes('compare') || q.includes(' vs ') || q.includes(' versus ')) {
+      const mentionedYears = yearsList.filter(yr => q.includes(String(yr)));
+      if (mentionedYears.length >= 2) {
+        const [yrA, yrB] = mentionedYears;
+        const salesA = globalStats.salesByYear[yrA] || 0;
+        const salesB = globalStats.salesByYear[yrB] || 0;
+        const qtyA = globalStats.qtyByYear[yrA] || 0;
+        const qtyB = globalStats.qtyByYear[yrB] || 0;
+        const pctChange = salesA !== 0 ? (((salesB - salesA) / salesA) * 100).toFixed(1) : 'N/A';
+        return `📊 **${yrA} vs ${yrB}:**\n\n| Metric | ${yrA} | ${yrB} |\n|---|---|---|\n| Revenue | ${salesA.toLocaleString()} AED | ${salesB.toLocaleString()} AED |\n| Units Sold | ${qtyA.toLocaleString()} | ${qtyB.toLocaleString()} |\n\nRevenue changed by **${pctChange}%** from ${yrA} to ${yrB}.`;
+      }
+
+      const mentionedCompanies = findAllMentionedCompanies(q);
+      if (mentionedCompanies.length >= 2) {
+        const [nameA, nameB] = mentionedCompanies;
+        const compA = globalStats.companies.find(c => c.name === nameA);
+        const compB = globalStats.companies.find(c => c.name === nameB);
+        if (compA && compB) {
+          return `🏢 **${compA.name} vs ${compB.name}:**\n\n| Metric | ${compA.name} | ${compB.name} |\n|---|---|---|\n| Total Sales | ${compA.totalSales.toLocaleString()} AED | ${compB.totalSales.toLocaleString()} AED |\n| Total Quantity | ${compA.totalQty.toLocaleString()} | ${compB.totalQty.toLocaleString()} |`;
+        }
+      }
+
+      const mentionedProducts = findAllMentionedProducts(q);
+      if (mentionedProducts.length >= 2) {
+        const [prodA, prodB] = mentionedProducts;
+        const agg = (name) => {
+          const rows = transactions.filter(t => t.product === name);
+          return rows.reduce((acc, t) => ({ sales: acc.sales + t.sales, qty: acc.qty + t.qty }), { sales: 0, qty: 0 });
+        };
+        const aggA = agg(prodA);
+        const aggB = agg(prodB);
+        return `📦 **${prodA} vs ${prodB}:**\n\n| Metric | ${prodA} | ${prodB} |\n|---|---|---|\n| Total Sales | ${aggA.sales.toLocaleString()} AED | ${aggB.sales.toLocaleString()} AED |\n| Total Quantity | ${aggA.qty.toLocaleString()} | ${aggB.qty.toLocaleString()} |`;
+      }
+
+      return `🤔 I can compare two **years** (e.g. "compare 2019 and 2021"), two **companies**, or two **products** — but I need to recognize both names/years in your question. Try being more specific, or use full company/product names.`;
+    }
+
+    // Trend / growth queries
+    if (q.includes('trend') || q.includes('growth') || q.includes('yoy') || q.includes('year over year') || q.includes('year-over-year')) {
+      const sortedYears = [...yearsList].sort();
+      let bestYear = null, bestGrowth = -Infinity, worstYear = null, worstGrowth = Infinity;
+      const lines = sortedYears.map((yr, idx) => {
+        const sales = globalStats.salesByYear[yr] || 0;
+        if (idx === 0) return `- **${yr}:** ${sales.toLocaleString()} AED`;
+        const prevSales = globalStats.salesByYear[sortedYears[idx - 1]] || 0;
+        const growth = prevSales !== 0 ? ((sales - prevSales) / prevSales) * 100 : 0;
+        if (growth > bestGrowth) { bestGrowth = growth; bestYear = yr; }
+        if (growth < worstGrowth) { worstGrowth = growth; worstYear = yr; }
+        const arrow = growth >= 0 ? '▲' : '▼';
+        return `- **${yr}:** ${sales.toLocaleString()} AED (${arrow} ${growth.toFixed(1)}%)`;
+      });
+      return `📈 **Revenue Trend (2009 - 2021):**\n\n${lines.join('\n')}\n\n**Strongest growth:** ${bestYear} (${bestGrowth.toFixed(1)}%)\n**Weakest growth:** ${worstYear} (${worstGrowth.toFixed(1)}%)`;
+    }
+
     // Check for "how many companies" or similar
     if (q.includes('how many companies') || q.includes('how many customers') || q.includes('total companies')) {
-      return `📊 There are **582 unique companies** present in this sales report. The top customer by sales is **${compiledData.companies[0].name}**, with a total sales volume of **${compiledData.companies[0].totalSales.toLocaleString()} AED** over the active years.`;
+      return `📊 There are **${globalStats.companyCount} unique companies** present in this sales report. The top customer by sales is **${globalStats.companies[0].name}**, with a total sales volume of **${globalStats.companies[0].totalSales.toLocaleString()} AED** over the active years.`;
     }
-    
+
     // Check for "how many products" or similar
     if (q.includes('how many products') || q.includes('total products')) {
-      return `📦 There are **5,687 unique products** listed in this report. The highest-selling product by revenue is **${stats.topProducts[0].product}**, generating **${stats.topProducts[0].sales.toLocaleString()} AED** in revenue.`;
+      return `📦 There are **${globalStats.productCount.toLocaleString()} unique products** listed in this report. The highest-selling product by revenue is **${globalStats.topProducts[0].product}**, generating **${globalStats.topProducts[0].sales.toLocaleString()} AED** in revenue.`;
     }
-    
+
     // Check for "total sales" or "total revenue"
     if (q.includes('total sales') || q.includes('total revenue') || q.includes('sales volume')) {
-      return `💰 The total sales revenue aggregated from **2009 to 2021** is **${stats.totalSalesAED.toLocaleString(undefined, {maximumFractionDigits:2})} AED**, representing a total quantity of **${stats.totalQty.toLocaleString()} units** sold.`;
+      return `💰 The total sales revenue aggregated from **2009 to 2021** is **${globalStats.totalSalesAED.toLocaleString(undefined, {maximumFractionDigits:2})} AED**, representing a total quantity of **${globalStats.totalQty.toLocaleString()} units** sold.`;
     }
 
     // Check for top products
     if (q.includes('top product') || q.includes('highest selling product') || q.includes('best product')) {
-      const topList = stats.topProducts.slice(0, 5).map((p, idx) => `${idx + 1}. **${p.product}** - Sales: *${p.sales.toLocaleString()} AED* (Qty: ${p.qty.toLocaleString()})`).join('\n');
+      const topList = globalStats.topProducts.slice(0, 5).map((p, idx) => `${idx + 1}. **${p.product}** - Sales: *${p.sales.toLocaleString()} AED* (Qty: ${p.qty.toLocaleString()})`).join('\n');
       return `🏆 Here are the **Top 5 Products** by sales revenue:\n\n${topList}`;
     }
 
     // Check for top companies
     if (q.includes('top company') || q.includes('highest sales company') || q.includes('best customer')) {
-      const topList = compiledData.companies.slice(0, 5).map((c, idx) => `${idx + 1}. **${c.name}** - Total Sales: *${c.totalSales.toLocaleString()} AED* (Ref: ${c.ref || 'N/A'})`).join('\n');
+      const topList = globalStats.companies.slice(0, 5).map((c, idx) => `${idx + 1}. **${c.name}** - Total Sales: *${c.totalSales.toLocaleString()} AED* (Ref: ${c.ref || 'N/A'})`).join('\n');
       return `🏢 Here are the **Top 5 Companies** by sales revenue:\n\n${topList}`;
     }
 
     // Check for a specific year
     for (const yr of yearsList) {
       if (q.includes(String(yr))) {
-        const sales = stats.salesByYear[yr] || 0;
-        const qty = stats.qtyByYear[yr] || 0;
-        return `📅 **Sales Summary for Year ${yr}:**\n- **Total Revenue:** ${sales.toLocaleString(undefined, {maximumFractionDigits: 2})} AED\n- **Volume Sold:** ${qty.toLocaleString()} units\n- **Contribution:** ${((sales / stats.totalSalesAED) * 100).toFixed(2)}% of historical total sales.`;
+        const sales = globalStats.salesByYear[yr] || 0;
+        const qty = globalStats.qtyByYear[yr] || 0;
+        return `📅 **Sales Summary for Year ${yr}:**\n- **Total Revenue:** ${sales.toLocaleString(undefined, {maximumFractionDigits: 2})} AED\n- **Volume Sold:** ${qty.toLocaleString()} units\n- **Contribution:** ${((sales / globalStats.totalSalesAED) * 100).toFixed(2)}% of historical total sales.`;
       }
     }
 
@@ -500,29 +936,77 @@ export default function App() {
     const compName = findMentionedCompany(q);
     if (compName) {
       // Aggregate data for this company
-      const compData = compiledData.companies.find(c => c.name === compName);
+      const compData = globalStats.companies.find(c => c.name === compName);
       if (compData) {
         const historyText = Object.keys(compData.totals).map(yr => {
           const t = compData.totals[yr];
           return `- **Year ${yr}:** Qty ${t.qty.toLocaleString()}, Sales ${t.val.toLocaleString()} AED`;
         }).join('\n');
-        
+
         return `🏢 **Sales report for ${compData.name}** (Ref: ${compData.ref || 'N/A'}):\n- **Total Sales:** ${compData.totalSales.toLocaleString()} AED\n- **Total Quantity:** ${compData.totalQty.toLocaleString()} units\n\n**Annual Performance Breakdown:**\n${historyText || 'No sales records found'}`;
       }
     }
 
-    return `🤖 **Local Assistant Note:** I couldn't run a precise local query for your question. To get deep analytical insights, ask custom questions, or find patterns in your sales data, please enter a **Gemini API Key** in the settings panel above!\n\n*Suggestions for offline mode:*\n- "Show top products"\n- "What are the total sales?"\n- "How many companies are there?"\n- "Show sales in 2018"`;
+    // Check if a specific product is mentioned in the query
+    const prodName = findMentionedProduct(q);
+    if (prodName) {
+      const prodTx = transactions.filter(t => t.product === prodName);
+      const byYear = {};
+      let totalSales = 0, totalQty = 0;
+      const byCompany = {};
+      prodTx.forEach(t => {
+        totalSales += t.sales;
+        totalQty += t.qty;
+        byYear[t.year] = byYear[t.year] || { qty: 0, sales: 0 };
+        byYear[t.year].qty += t.qty;
+        byYear[t.year].sales += t.sales;
+        byCompany[t.company] = (byCompany[t.company] || 0) + t.sales;
+      });
+      const historyText = Object.keys(byYear).sort().map(yr =>
+        `- **Year ${yr}:** Qty ${byYear[yr].qty.toLocaleString()}, Sales ${byYear[yr].sales.toLocaleString()} AED`
+      ).join('\n');
+      const topBuyer = Object.entries(byCompany).sort((a, b) => b[1] - a[1])[0];
+      return `📦 **Sales report for ${prodName}:**\n- **Total Sales:** ${totalSales.toLocaleString()} AED\n- **Total Quantity:** ${totalQty.toLocaleString()} units\n- **Top Buyer:** ${topBuyer ? `${topBuyer[0]} (${topBuyer[1].toLocaleString()} AED)` : 'N/A'}\n\n**Annual Performance Breakdown:**\n${historyText || 'No sales records found'}`;
+    }
+
+    return `🤖 **Local Assistant Note:** I couldn't run a precise local query for your question. To get deep analytical insights, ask custom questions, or find patterns in your sales data, please enter a **Gemini API Key** in the settings panel above!\n\n*Suggestions for offline mode:*\n- "Show top products"\n- "What are the total sales?"\n- "How many companies are there?"\n- "Show sales in 2018"\n- "Compare 2019 and 2021"\n- "Sales trend"\n- Type "help" to see everything I can do`;
   };
 
   const findMentionedCompany = (queryText) => {
     const lowerQuery = queryText.toLowerCase();
     // Scan all companies
-    for (const comp of compiledData.allCompanyNames) {
+    for (const comp of globalStats.allCompanyNames) {
       if (lowerQuery.includes(comp.toLowerCase())) {
         return comp;
       }
     }
     return null;
+  };
+
+  // Find every company mentioned (used for "compare X and Y" queries).
+  // Names under 5 chars are skipped to avoid matching common words.
+  const findAllMentionedCompanies = (queryText) => {
+    const lowerQuery = queryText.toLowerCase();
+    return globalStats.allCompanyNames.filter(
+      comp => comp.length >= 5 && lowerQuery.includes(comp.toLowerCase())
+    );
+  };
+
+  const findMentionedProduct = (queryText) => {
+    const lowerQuery = queryText.toLowerCase();
+    for (const prod of globalStats.allProductNames) {
+      if (prod.length >= 5 && lowerQuery.includes(prod.toLowerCase())) {
+        return prod;
+      }
+    }
+    return null;
+  };
+
+  const findAllMentionedProducts = (queryText) => {
+    const lowerQuery = queryText.toLowerCase();
+    return globalStats.allProductNames.filter(
+      prod => prod.length >= 5 && lowerQuery.includes(prod.toLowerCase())
+    );
   };
 
   // Run Gemini API Assistant
@@ -542,23 +1026,38 @@ export default function App() {
     setMessages(prev => [...prev, userMsg]);
     setIsAiTyping(true);
 
+    const activeKey = aiProvider === 'claude' ? claudeApiKey : apiKey;
+
     try {
-      if (apiKey) {
+      if (activeKey) {
         // Build RAG context
         // Scan for mentioned companies/products
         const mentionedCompany = findMentionedCompany(userText);
+        const mentionedProduct = findMentionedProduct(userText);
         let customContext = '';
 
         if (mentionedCompany) {
           // Get transactions of this company
-          const compTx = compiledData.transactions
+          const compTx = transactions
             .filter(t => t.company.toLowerCase() === mentionedCompany.toLowerCase())
             .slice(0, 150); // limit to 150 records to fit comfortably
 
-          customContext = `
+          customContext += `
 Specific query context for mentioned company "${mentionedCompany}":
 The company has ${compTx.length} detailed transaction points in this file. Here they are:
 ${JSON.stringify(compTx.map(t => ({ product: t.product, year: t.year, qty: t.qty, sales: t.sales })))}
+`;
+        }
+
+        if (mentionedProduct) {
+          const prodTx = transactions
+            .filter(t => t.product === mentionedProduct)
+            .slice(0, 150);
+
+          customContext += `
+Specific query context for mentioned product "${mentionedProduct}":
+The product has ${prodTx.length} detailed transaction points in this file. Here they are:
+${JSON.stringify(prodTx.map(t => ({ company: t.company, year: t.year, qty: t.qty, sales: t.sales })))}
 `;
         }
 
@@ -566,24 +1065,33 @@ ${JSON.stringify(compTx.map(t => ({ product: t.product, year: t.year, qty: t.qty
 You are helping the management analyze a sales dataset spanning 2009 to 2021.
 The source file is 'Historical Report 2009-2021 (1).xls'.
 Here is the high-level summary of the dataset:
-- Total Sales Revenue: ${stats.totalSalesAED.toLocaleString()} AED
-- Total Units Sold: ${stats.totalQty.toLocaleString()}
-- Total Unique Customers/Companies: ${stats.companyCount}
-- Total Unique Products: ${stats.productCount}
+- Total Sales Revenue: ${globalStats.totalSalesAED.toLocaleString()} AED
+- Total Units Sold: ${globalStats.totalQty.toLocaleString()}
+- Total Unique Customers/Companies: ${globalStats.companyCount}
+- Total Unique Products: ${globalStats.productCount}
 
 Sales by Year:
-${JSON.stringify(stats.salesByYear)}
+${JSON.stringify(globalStats.salesByYear)}
+
+Units Sold by Year:
+${JSON.stringify(globalStats.qtyByYear)}
 
 Top 10 Products by Sales:
-${JSON.stringify(stats.topProducts.slice(0, 10))}
+${JSON.stringify(globalStats.topProducts.slice(0, 10))}
+
+Top 10 Companies by Sales:
+${JSON.stringify(globalStats.companies.slice(0, 10).map(c => ({ name: c.name, totalSales: c.totalSales, totalQty: c.totalQty })))}
 
 ${customContext}
 
-Answer the user's question accurately using the data above. Be direct, professional, and insightful. Format your response with markdown tables or bullets where helpful.`;
+Answer the user's question accurately using the data above. Be direct, professional, and insightful. Format your response with markdown tables or bullets where helpful. If the question requires data not present above (e.g. a company/product not listed), say so rather than guessing.`;
 
-        // Send API call to Gemini
-        const aiText = await callGeminiAPI(apiKey, userText, systemInstruction);
-        
+        // Send API call to the selected provider
+        const aiText = aiProvider === 'claude'
+          ? await callClaudeAPI(claudeApiKey, userText, systemInstruction)
+          : await callGeminiAPI(apiKey, userText, systemInstruction);
+
+
         setMessages(prev => [
           ...prev,
           {
@@ -614,7 +1122,7 @@ Answer the user's question accurately using the data above. Be direct, professio
         ...prev,
         {
           sender: 'ai',
-          text: `❌ **Error calling Gemini API:** ${err.message || 'Check your internet connection and API Key.'}`,
+          text: `❌ **Error calling ${aiProvider === 'claude' ? 'Claude' : 'Gemini'} API:** ${err.message || 'Check your internet connection and API Key.'}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         }
       ]);
@@ -649,6 +1157,25 @@ Answer the user's question accurately using the data above. Be direct, professio
     return resData.candidates[0].content.parts[0].text;
   };
 
+  const callClaudeAPI = async (key, prompt, systemInstruction) => {
+    const anthropic = new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true });
+
+    const response = await anthropic.messages.create({
+      model: 'claude-opus-5',
+      max_tokens: 2048,
+      system: systemInstruction,
+      output_config: { effort: 'medium' },
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    if (response.stop_reason === 'refusal') {
+      throw new Error('Claude declined to answer this request.');
+    }
+
+    const textBlock = response.content.find(block => block.type === 'text');
+    return textBlock ? textBlock.text : '';
+  };
+
   // Convert markdown-like syntax to HTML strings safely
   const formatMessageText = (text) => {
     // Replace markdown bold **
@@ -673,18 +1200,7 @@ Answer the user's question accurately using the data above. Be direct, professio
         backgroundColor: 'var(--bg-primary)',
         fontFamily: 'var(--font-family)'
       }}>
-        <form onSubmit={handleLogin} style={{
-          backgroundColor: 'var(--bg-secondary)',
-          border: '1px solid var(--border-light)',
-          borderRadius: 'var(--border-radius-lg)',
-          padding: '40px',
-          width: '420px',
-          boxShadow: '0 10px 40px rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '24px',
-          backdropFilter: 'blur(10px)'
-        }}>
+        <form onSubmit={handleLogin} className="login-card">
           <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '10px' }}>
             <div className="logo-icon" style={{ width: '48px', height: '48px' }}>
               <FileSpreadsheet size={26} color="#fff" />
@@ -810,15 +1326,45 @@ Answer the user's question accurately using the data above. Be direct, professio
             </div>
             {showApiSettings ? (
               <form onSubmit={handleSaveApiKey} className="panel-content" style={{ marginTop: '10px' }}>
-                <label className="help-text" style={{ fontSize: '0.75rem' }}>Gemini API Key:</label>
+                <div style={{ display: 'flex', gap: '6px', marginBottom: '4px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setAiProvider('gemini')}
+                    className={aiProvider === 'gemini' ? 'btn-primary' : 'btn-secondary'}
+                    style={{ flex: 1, padding: '8px', fontSize: '0.8rem' }}
+                  >
+                    Gemini
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAiProvider('claude')}
+                    className={aiProvider === 'claude' ? 'btn-primary' : 'btn-secondary'}
+                    style={{ flex: 1, padding: '8px', fontSize: '0.8rem' }}
+                  >
+                    Claude
+                  </button>
+                </div>
+                <label className="help-text" style={{ fontSize: '0.75rem' }}>
+                  {aiProvider === 'claude' ? 'Claude API Key:' : 'Gemini API Key:'}
+                </label>
                 <div className="api-input-group">
-                  <input 
-                    type="password" 
-                    placeholder="AIzaSy..." 
-                    className="input-glow"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                  />
+                  {aiProvider === 'claude' ? (
+                    <input
+                      type="password"
+                      placeholder="sk-ant-..."
+                      className="input-glow"
+                      value={claudeApiKey}
+                      onChange={(e) => setClaudeApiKey(e.target.value)}
+                    />
+                  ) : (
+                    <input
+                      type="password"
+                      placeholder="AIzaSy..."
+                      className="input-glow"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                    />
+                  )}
                   <button type="submit" className="btn-primary" style={{ padding: '8px 12px' }}>
                     Save
                   </button>
@@ -828,17 +1374,29 @@ Answer the user's question accurately using the data above. Be direct, professio
                 </span>
               </form>
             ) : (
-              <div style={{ fontSize: '0.75rem', color: apiKey ? '#10b981' : '#71717a', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
-                <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: apiKey ? '#10b981' : '#71717a' }}></div>
-                {apiKey ? 'Gemini Advanced AI Mode Active' : 'Offline Local Mode Active (limited questions)'}
+              <div style={{ fontSize: '0.75rem', color: (aiProvider === 'claude' ? claudeApiKey : apiKey) ? '#10b981' : '#71717a', display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' }}>
+                <div style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: (aiProvider === 'claude' ? claudeApiKey : apiKey) ? '#10b981' : '#71717a' }}></div>
+                {(aiProvider === 'claude' ? claudeApiKey : apiKey)
+                  ? `${aiProvider === 'claude' ? 'Claude' : 'Gemini'} Advanced AI Mode Active`
+                  : 'Offline Local Mode Active (limited questions)'}
               </div>
             )}
           </div>
 
           {/* AI Insights Chat */}
           <div className="chat-container">
-            <div className="panel-title" style={{ padding: '12px', borderBottom: '1px solid var(--border-light)', margin: 0, backgroundColor: 'rgba(39, 39, 42, 0.2)' }}>
-              <Bot size={16} color="#6366f1" style={{ marginRight: '6px' }} /> AI Business Analyst
+            <div className="panel-title" style={{ padding: '12px', borderBottom: '1px solid var(--border-light)', margin: 0, backgroundColor: 'rgba(39, 39, 42, 0.2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ display: 'flex', alignItems: 'center' }}>
+                <Bot size={16} color="#6366f1" style={{ marginRight: '6px' }} /> AI Business Analyst
+              </span>
+              <button
+                onClick={handleClearChat}
+                className="btn-secondary"
+                style={{ padding: '3px 8px', fontSize: '0.7rem', borderRadius: '4px', textTransform: 'none' }}
+                title="Clear chat history"
+              >
+                Clear
+              </button>
             </div>
             
             <div className="chat-messages">
@@ -972,6 +1530,87 @@ Answer the user's question accurately using the data above. Be direct, professio
           {/* OVERVIEW DASHBOARD */}
           {activeTab === 'overview' && (
             <div className="tab-panel">
+              {/* Year Range Filter */}
+              <div className="table-controls" style={{ flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                  Year Range:
+                </span>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+                  <select
+                    className="select-custom"
+                    value={overviewFromYear}
+                    onChange={(e) => setOverviewFromYear(Number(e.target.value))}
+                  >
+                    {yearsList.map(yr => (
+                      <option key={yr} value={yr} disabled={yr > overviewToYear}>{yr}</option>
+                    ))}
+                  </select>
+                  <span style={{ color: 'var(--text-muted)' }}>to</span>
+                  <select
+                    className="select-custom"
+                    value={overviewToYear}
+                    onChange={(e) => setOverviewToYear(Number(e.target.value))}
+                  >
+                    {yearsList.map(yr => (
+                      <option key={yr} value={yr} disabled={yr < overviewFromYear}>{yr}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => { setOverviewFromYear(yearsList[0]); setOverviewToYear(yearsList[yearsList.length - 1]); }}
+                    className="btn-secondary"
+                    style={{ padding: '10px 16px', fontSize: '0.85rem' }}
+                  >
+                    All Time
+                  </button>
+                  <button
+                    onClick={() => { setOverviewFromYear(Math.max(yearsList[0], yearsList[yearsList.length - 1] - 2)); setOverviewToYear(yearsList[yearsList.length - 1]); }}
+                    className="btn-secondary"
+                    style={{ padding: '10px 16px', fontSize: '0.85rem' }}
+                  >
+                    Last 3 Years
+                  </button>
+                </div>
+
+                <div style={{ marginLeft: 'auto', display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <input
+                    ref={importFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    style={{ display: 'none' }}
+                    onChange={handleImportFile}
+                  />
+                  <button
+                    onClick={() => importFileInputRef.current && importFileInputRef.current.click()}
+                    className="btn-secondary"
+                    style={{ padding: '10px 16px', fontSize: '0.85rem', gap: '8px', display: 'flex', alignItems: 'center' }}
+                    title="Import a new report — either the tidy CSV template or a file shaped like the original spreadsheet"
+                  >
+                    <FileSpreadsheet size={16} color="#6366f1" /> Import Excel / CSV
+                  </button>
+                  <button
+                    onClick={handleReloadOriginalData}
+                    className="btn-secondary"
+                    style={{ padding: '10px 16px', fontSize: '0.85rem', gap: '8px', display: 'flex', alignItems: 'center' }}
+                    title="Discard any imported data and restore the original bundled report"
+                  >
+                    <RefreshCw size={16} /> Reload Original Data
+                  </button>
+                </div>
+              </div>
+
+              {importStatus && (
+                <div style={{
+                  fontSize: '0.85rem',
+                  padding: '10px 16px',
+                  borderRadius: 'var(--border-radius-sm)',
+                  backgroundColor: importStatus.type === 'error' ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)',
+                  color: importStatus.type === 'error' ? '#f87171' : '#10b981',
+                  border: `1px solid ${importStatus.type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)'}`
+                }}>
+                  {importStatus.text.replace(/\*\*/g, '')}
+                </div>
+              )}
+
               {/* Stats Cards */}
               <div className="stats-grid">
                 <div className="stats-card">
@@ -980,7 +1619,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                   </div>
                   <div className="stats-info">
                     <span className="stats-label">Total Revenue</span>
-                    <span className="stats-value">{formatCurrency(stats.totalSalesAED)}</span>
+                    <span className="stats-value">{formatCurrency(overviewStats.totalSalesAED)}</span>
                   </div>
                 </div>
 
@@ -990,7 +1629,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                   </div>
                   <div className="stats-info">
                     <span className="stats-label">Units Sold</span>
-                    <span className="stats-value">{formatNumber(stats.totalQty)}</span>
+                    <span className="stats-value">{formatNumber(overviewStats.totalQty)}</span>
                   </div>
                 </div>
 
@@ -1000,7 +1639,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                   </div>
                   <div className="stats-info">
                     <span className="stats-label">Active Customers</span>
-                    <span className="stats-value">{stats.companyCount}</span>
+                    <span className="stats-value">{overviewStats.companyCount}</span>
                   </div>
                 </div>
 
@@ -1010,7 +1649,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                   </div>
                   <div className="stats-info">
                     <span className="stats-label">Total Products</span>
-                    <span className="stats-value">{stats.productCount}</span>
+                    <span className="stats-value">{overviewStats.productCount}</span>
                   </div>
                 </div>
               </div>
@@ -1021,7 +1660,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                   <div className="visual-card-header">
                     <span className="visual-card-title">
                       <Sparkles size={16} color="#6366f1" style={{ marginRight: '8px' }} />
-                      Revenue & Quantity Sales Trends (2009 - 2021)
+                      Revenue & Quantity Sales Trends ({overviewFromYear} - {overviewToYear})
                     </span>
                   </div>
                   <div style={{ flex: 1, position: 'relative', height: '320px' }}>
