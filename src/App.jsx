@@ -231,6 +231,7 @@ export default function App() {
   // Overview dashboard year filter
   const [overviewFromYear, setOverviewFromYear] = useState(2009);
   const [overviewToYear, setOverviewToYear] = useState(2021);
+  const [overviewTrendChartType, setOverviewTrendChartType] = useState('line');
 
   // Table filters
   const [searchTerm, setSearchTerm] = useState('');
@@ -292,6 +293,36 @@ export default function App() {
       chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, isAiTyping]);
+
+  // Chart.js canvases in this layout can get measured against a stale
+  // container size (e.g. right after a tab mounts, or when the sidebar
+  // opens/closes and changes available width) and never self-correct —
+  // even an explicit chart.resize() call doesn't reliably recompute against
+  // the canvas's *current* container. The reliable fix is to fully remount
+  // the chart (fresh mounts always measure correctly) whenever something
+  // that changes chart container size happens, by changing its React key.
+  const [chartLayoutKey, setChartLayoutKey] = useState(0);
+
+  useEffect(() => {
+    // Bump once immediately (covers tab switches), then again after the
+    // sidebar's CSS transition (--transition-smooth, 0.3s) settles.
+    setChartLayoutKey(k => k + 1);
+    const timeoutId = setTimeout(() => setChartLayoutKey(k => k + 1), 350);
+    return () => clearTimeout(timeoutId);
+  }, [activeTab, isSidebarOpen, overviewFromYear, overviewToYear, chartType]);
+
+  useEffect(() => {
+    let debounceId;
+    const handleResize = () => {
+      clearTimeout(debounceId);
+      debounceId = setTimeout(() => setChartLayoutKey(k => k + 1), 150);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      clearTimeout(debounceId);
+    };
+  }, []);
 
   // Handle Login authentication
   const handleLogin = (e) => {
@@ -674,6 +705,7 @@ export default function App() {
     const sortedYears = [...yearsList].filter(yr => yr >= overviewFromYear && yr <= overviewToYear).sort();
     const salesData = sortedYears.map(yr => overviewStats.salesByYear[yr] || 0);
     const qtyData = sortedYears.map(yr => overviewStats.qtyByYear[yr] || 0);
+    const isBar = overviewTrendChartType === 'bar';
 
     return {
       labels: sortedYears,
@@ -682,8 +714,9 @@ export default function App() {
           label: 'Total Revenue (AED)',
           data: salesData,
           borderColor: '#6366f1', // Indigo
-          backgroundColor: 'rgba(99, 102, 241, 0.2)',
-          borderWidth: 3,
+          backgroundColor: isBar ? 'rgba(99, 102, 241, 0.85)' : 'rgba(99, 102, 241, 0.2)',
+          borderWidth: isBar ? 0 : 3,
+          borderRadius: isBar ? 4 : 0,
           tension: 0.3,
           fill: true,
           yAxisID: 'y'
@@ -692,15 +725,16 @@ export default function App() {
           label: 'Units Sold (Qty)',
           data: qtyData,
           borderColor: '#06b6d4', // Cyan
-          backgroundColor: 'rgba(6, 182, 212, 0.1)',
-          borderWidth: 2,
+          backgroundColor: isBar ? 'rgba(6, 182, 212, 0.85)' : 'rgba(6, 182, 212, 0.1)',
+          borderWidth: isBar ? 0 : 2,
+          borderRadius: isBar ? 4 : 0,
           tension: 0.3,
-          borderDash: [5, 5],
+          borderDash: isBar ? undefined : [5, 5],
           yAxisID: 'y1'
         }
       ]
     };
-  }, [overviewStats, overviewFromYear, overviewToYear]);
+  }, [overviewStats, overviewFromYear, overviewToYear, overviewTrendChartType]);
 
   const overviewChartOptions = {
     responsive: true,
@@ -1662,9 +1696,29 @@ Answer the user's question accurately using the data above. Be direct, professio
                       <Sparkles size={16} color="#6366f1" style={{ marginRight: '8px' }} />
                       Revenue & Quantity Sales Trends ({overviewFromYear} - {overviewToYear})
                     </span>
+                    <div style={{ display: 'flex', gap: '4px' }}>
+                      <button
+                        onClick={() => setOverviewTrendChartType('line')}
+                        className={overviewTrendChartType === 'line' ? 'btn-primary' : 'btn-secondary'}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                      >
+                        Line
+                      </button>
+                      <button
+                        onClick={() => setOverviewTrendChartType('bar')}
+                        className={overviewTrendChartType === 'bar' ? 'btn-primary' : 'btn-secondary'}
+                        style={{ padding: '6px 12px', fontSize: '0.75rem' }}
+                      >
+                        Bar
+                      </button>
+                    </div>
                   </div>
                   <div style={{ flex: 1, position: 'relative', height: '320px' }}>
-                    <Line data={overviewChartData} options={overviewChartOptions} />
+                    {overviewTrendChartType === 'line' ? (
+                      <Line key={`overview-line-${chartLayoutKey}`} data={overviewChartData} options={overviewChartOptions} />
+                    ) : (
+                      <Bar key={`overview-bar-${chartLayoutKey}`} data={overviewChartData} options={overviewChartOptions} />
+                    )}
                   </div>
                 </div>
 
@@ -1673,8 +1727,9 @@ Answer the user's question accurately using the data above. Be direct, professio
                     <span className="visual-card-title">Top 7 Products (AED)</span>
                   </div>
                   <div style={{ flex: 1, position: 'relative', height: '320px' }}>
-                    <Bar 
-                      data={topProductsChartData} 
+                    <Bar
+                      key={`top-products-${chartLayoutKey}`}
+                      data={topProductsChartData}
                       options={{
                         responsive: true,
                         maintainAspectRatio: false,
@@ -2148,8 +2203,9 @@ Answer the user's question accurately using the data above. Be direct, professio
               <div className="chart-container-wrapper">
                 <div style={{ position: 'relative', width: '95%', height: '420px' }}>
                   {chartType === 'line' ? (
-                    <Line 
-                      data={builderChartData} 
+                    <Line
+                      key={`builder-line-${chartLayoutKey}`}
+                      data={builderChartData}
                       options={{
                         responsive: true,
                         maintainAspectRatio: false,
@@ -2163,18 +2219,19 @@ Answer the user's question accurately using the data above. Be direct, professio
                           },
                           y: {
                             grid: { color: 'rgba(63, 63, 70, 0.15)' },
-                            ticks: { 
+                            ticks: {
                               color: '#a1a1aa',
                               font: { family: 'Outfit', size: 10 },
                               callback: (val) => val >= 1e6 ? `${(val / 1e6).toFixed(1)}M` : val.toLocaleString()
                             }
                           }
                         }
-                      }} 
+                      }}
                     />
                   ) : (
-                    <Bar 
-                      data={builderChartData} 
+                    <Bar
+                      key={`builder-bar-${chartLayoutKey}`}
+                      data={builderChartData}
                       options={{
                         responsive: true,
                         maintainAspectRatio: false,
