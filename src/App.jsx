@@ -2010,7 +2010,7 @@ Answer the user's question accurately using the data above. Be direct, professio
           {/* CUSTOMERS */}
           {activeTab === 'customers' && (
             <div className="tab-panel">
-              <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+              <div className="stats-grid">
                 <div className="stats-card">
                   <div className="stats-icon-box purple"><Users size={22} /></div>
                   <div className="stats-info">
@@ -2112,7 +2112,7 @@ Answer the user's question accurately using the data above. Be direct, professio
           {/* PRODUCTS / SKUs */}
           {activeTab === 'products' && (
             <div className="tab-panel">
-              <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+              <div className="stats-grid">
                 <div className="stats-card">
                   <div className="stats-icon-box"><Tag size={22} /></div>
                   <div className="stats-info">
