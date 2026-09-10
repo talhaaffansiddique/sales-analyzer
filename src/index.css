@@ -78,6 +78,7 @@ body {
 .sidebar {
   width: 380px;
   min-width: 380px;
+  flex-shrink: 0;
   background-color: var(--bg-secondary);
   border-right: 1px solid var(--border-light);
   display: flex;
@@ -486,8 +487,8 @@ body {
 }
 
 @keyframes panelFadeIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { transform: translateY(12px); }
+  to { transform: translateY(0); }
 }
 
 /* Card Grids */
@@ -583,7 +584,7 @@ body {
 /* Visualization Panel */
 .dashboard-row {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: 24px;
 }
 
@@ -596,6 +597,7 @@ body {
   flex-direction: column;
   gap: 16px;
   min-height: 400px;
+  min-width: 0;
 }
 
 .visual-card-title {
@@ -674,6 +676,13 @@ body {
   outline: none;
   cursor: pointer;
   transition: var(--transition-smooth);
+  /* Some option values (e.g. formulation free-text) are very long; without a
+     cap, native <select> boxes size themselves to fit their widest option
+     and can silently blow out the surrounding flex layout on narrow screens. */
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .select-custom:focus {
