@@ -1977,7 +1977,7 @@ Answer the user's question accurately using the data above. Be direct, professio
               </div>
 
               {/* Top Companies Summary Card */}
-              <div className="visual-card" style={{ minHeight: '200px' }}>
+              <div className="visual-card" style={{ minHeight: '500px' }}>
                 <div className="visual-card-header">
                   <span className="visual-card-title">Leading Corporate Accounts (Top 5 Sales)</span>
                 </div>
