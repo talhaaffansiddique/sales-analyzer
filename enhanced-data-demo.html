@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Captain &amp; Co — Enhanced Historical Data Demo</title>
+<style>
+  :root{--bg:#09090b;--bg2:#18181b;--bg3:#27272a;--bd:#27272a;--tx:#fafafa;--tx2:#a1a1aa;--tx3:#71717a;--in:#6366f1;--cy:#06b6d4;--em:#10b981;--pu:#a855f7;--am:#f59e0b;--rd:#ef4444}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--tx);font-family:'Segoe UI',system-ui,-apple-system,sans-serif;line-height:1.55;padding:32px 20px 80px}
+  .wrap{max-width:1000px;margin:0 auto}
+  h1{font-size:1.7rem;letter-spacing:-.02em}
+  h2{font-size:1.15rem;margin:38px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:10px}
+  h2 .n{background:var(--in);color:#fff;font-size:.75rem;width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+  p.sub{color:var(--tx2);font-size:.92rem;margin-top:6px}
+  .lead{color:var(--tx2);margin:10px 0 4px;font-size:.95rem}
+  .card{background:var(--bg2);border:1px solid var(--bd);border-radius:14px;padding:20px;margin-top:14px}
+  .grid{display:grid;gap:12px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  @media(max-width:820px){.g4{grid-template-columns:repeat(2,1fr)}.g2{grid-template-columns:1fr}}
+  .kpi{background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:14px 16px}
+  .kpi .l{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--tx2)}
+  .kpi .v{font-size:1.35rem;font-weight:700;margin:4px 0 2px}
+  .kpi .h{font-size:.72rem;color:var(--tx3)}
+  table{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:4px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--bd);vertical-align:top}
+  th{color:var(--tx2);font-weight:600;font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .chart{width:100%;height:auto;display:block;margin-top:6px}
+  .legend{display:flex;gap:18px;font-size:.8rem;color:var(--tx2);margin-top:8px}
+  .legend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:middle}
+  .pill{display:inline-block;background:var(--bg3);border:1px solid var(--bd);border-radius:20px;padding:3px 11px;font-size:.75rem;color:var(--tx2);margin:3px 4px 3px 0}
+  .warn{border-left:3px solid var(--am);background:rgba(245,158,11,.08);padding:12px 16px;border-radius:0 10px 10px 0;margin-top:14px;font-size:.9rem}
+  .ok{border-left:3px solid var(--em);background:rgba(16,185,129,.08);padding:12px 16px;border-radius:0 10px 10px 0;margin-top:14px;font-size:.9rem}
+  ul.chk{list-style:none;margin-top:8px}
+  ul.chk li{padding:7px 0 7px 26px;position:relative;font-size:.9rem;border-bottom:1px solid var(--bd)}
+  ul.chk li:before{content:"→";position:absolute;left:4px;color:var(--in)}
+  ul.chk li:last-child{border-bottom:none;color:var(--tx2)}
+  ul.chk li:last-child:before{content:"×";color:var(--tx3)}
+  code{background:var(--bg3);padding:1px 6px;border-radius:5px;font-size:.85em}
+  .flow{font-size:.85rem;color:var(--tx2);line-height:1.9}
+  .flow b{color:var(--tx)}
+  .foot{margin-top:50px;color:var(--tx3);font-size:.8rem;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Captain &amp; Co — Enhanced Historical Data</h1>
+  <p class="sub">Review demo built from <code>Captain&CO_Sales_2009-2021_Cleaned.xlsx</code>. Static preview — numbers are real, computed from your sheet. Nothing here is wired into the live app yet.</p>
+
+  <h2><span class="n">1</span> Source file the software detected</h2>
+  <div class="card">
+    <p class="lead">This workbook is already in the ideal shape — the <b>Sales Detail</b> sheet is one clean row per transaction, so no fragile column-offset parsing is needed.</p>
+    <div>
+      <span class="pill">Summary Sheet</span><span class="pill">Sales Detail</span><span class="pill">Customer-Year Summary</span><span class="pill">Customer-Product Summary</span><span class="pill">Formulations</span>
+    </div>
+    <table>
+      <tr><th>Property</th><th>Value</th></tr>
+      <tr><td>Transaction rows (Sales Detail)</td><td class="num">8,914</td></tr>
+      <tr><td>Year coverage</td><td class="num">2009 – 2021</td></tr>
+      <tr><td>Columns</td><td>Customer · Product · <b>Product Code</b> · Year · <b>Quantity (KG)</b> · <b>Sales Ex VAT</b> · <b>Sales Incl VAT</b> · Formulation</td></tr>
+    </table>
+    <div class="warn"><b>Partial year detected:</b> 2021 covers Jan–May only (per "Customer-Year Summary" header). The software should flag 2021 as incomplete and offer an annualized run-rate instead of showing a false drop.</div>
+  </div>
+
+  <h2><span class="n">2</span> What this file adds over the current app</h2>
+  <div class="card">
+    <table>
+      <tr><th>Dimension</th><th>Current app</th><th>With this file</th></tr>
+      <tr><td><b>Product Code (SKU)</b></td><td style="color:var(--tx3)">Not tracked — embedded in name text</td><td>779 distinct codes → roll up name spellings, SKU-level ranking & price trends</td></tr><tr><td><b>Units</b></td><td style="color:var(--tx3)">Ambiguous "qty"</td><td>Explicit KG → price-per-KG, weight-based analysis</td></tr><tr><td><b>VAT</b></td><td style="color:var(--tx3)">Single "sales w/ VAT" column</td><td>Clean Ex-VAT vs Incl-VAT split; VAT only from 2018 → correct net revenue + VAT audit</td></tr><tr><td><b>Customer lifecycle</b></td><td style="color:var(--tx3)">Not available</td><td>First / Last year supplied → cohorts, churn, reactivation, "revenue at risk"</td></tr><tr><td><b>Partial year</b></td><td style="color:var(--tx3)">Not flagged (2021 looked like a cliff)</td><td>2021 = Jan–May → annualized run-rate projection, no false decline</td></tr><tr><td><b>Formulation</b></td><td style="color:var(--tx3)">Messy free-text per row (84% blank here)</td><td>Dedicated catalog: 111 formulations, 95 products with multiple → clean "formulation mix"</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="n">3</span> Enhanced KPI row</h2>
+  <div class="grid g4">
+    <div class="kpi"><div class="l">Net revenue (ex VAT)</div><div class="v">AED 53.29M</div><div class="h">2009–2021, excludes tax</div></div><div class="kpi"><div class="l">VAT collected</div><div class="v">AED 974K</div><div class="h">post-2018 only</div></div><div class="kpi"><div class="l">Total volume</div><div class="v">627K kg</div><div class="h">units clarified as KG</div></div><div class="kpi"><div class="l">Avg price / KG</div><div class="v">AED 85.0</div><div class="h">new: revenue ÷ weight</div></div><div class="kpi"><div class="l">Active customers</div><div class="v">568</div><div class="h">ever supplied</div></div><div class="kpi"><div class="l">Distinct SKUs</div><div class="v">998</div><div class="h">by product code, vs 1,145 raw names</div></div><div class="kpi"><div class="l">Churned customers</div><div class="v">264</div><div class="h">no order since ≤2019</div></div><div class="kpi"><div class="l">Revenue at risk</div><div class="v">AED 5.56M</div><div class="h">last ordered 2020 only</div></div>
+  </div>
+
+  <h2><span class="n">4</span> Customer concentration (Pareto)</h2>
+  <div class="card">
+    <p class="lead">Top 5 customers = <b>25.0%</b> of revenue, top 10 = <b>35.5%</b>. Bars = lifetime revenue, orange line = cumulative %.</p>
+    <svg viewBox="0 0 640 260" class="chart"><line x1="52" y1="170" x2="596" y2="170" stroke="#27272a"/><text x="46" y="173" fill="#71717a" font-size="9" text-anchor="end">0.0M</text><text x="602" y="173" fill="#f59e0b" font-size="9">0%</text><line x1="52" y1="130.5" x2="596" y2="130.5" stroke="#27272a"/><text x="46" y="133.5" fill="#71717a" font-size="9" text-anchor="end">1.3M</text><text x="602" y="133.5" fill="#f59e0b" font-size="9">25%</text><line x1="52" y1="91" x2="596" y2="91" stroke="#27272a"/><text x="46" y="94" fill="#71717a" font-size="9" text-anchor="end">2.7M</text><text x="602" y="94" fill="#f59e0b" font-size="9">50%</text><line x1="52" y1="51.5" x2="596" y2="51.5" stroke="#27272a"/><text x="46" y="54.5" fill="#71717a" font-size="9" text-anchor="end">4.0M</text><text x="602" y="54.5" fill="#f59e0b" font-size="9">75%</text><line x1="52" y1="12" x2="596" y2="12" stroke="#27272a"/><text x="46" y="15" fill="#71717a" font-size="9" text-anchor="end">5.3M</text><text x="602" y="15" fill="#f59e0b" font-size="9">100%</text><rect x="62.9" y="26.4" width="32.6" height="143.6" fill="#6366f1" rx="2"/><rect x="117.3" y="67.0" width="32.6" height="103.0" fill="#6366f1" rx="2"/><rect x="171.7" y="117.9" width="32.6" height="52.1" fill="#6366f1" rx="2"/><rect x="226.1" y="118.7" width="32.6" height="51.3" fill="#6366f1" rx="2"/><rect x="280.5" y="123.1" width="32.6" height="46.9" fill="#6366f1" rx="2"/><rect x="334.9" y="129.6" width="32.6" height="40.4" fill="#6366f1" rx="2"/><rect x="389.3" y="136.7" width="32.6" height="33.3" fill="#6366f1" rx="2"/><rect x="443.7" y="138.2" width="32.6" height="31.8" fill="#6366f1" rx="2"/><rect x="498.1" y="138.3" width="32.6" height="31.7" fill="#6366f1" rx="2"/><rect x="552.5" y="140.8" width="32.6" height="29.2" fill="#6366f1" rx="2"/><path d="M79.2 155.7 L133.6 145.4 L188.0 140.3 L242.4 135.1 L296.8 130.5 L351.2 126.4 L405.6 123.1 L460.0 120.0 L514.4 116.8 L568.8 113.9 " fill="none" stroke="#f59e0b" stroke-width="2"/><circle cx="79.2" cy="155.7" r="3" fill="#f59e0b"/><text x="79.2" y="148.7" fill="#f59e0b" font-size="9" text-anchor="middle">9%</text><circle cx="133.6" cy="145.4" r="3" fill="#f59e0b"/><text x="133.6" y="138.4" fill="#f59e0b" font-size="9" text-anchor="middle">16%</text><circle cx="188.0" cy="140.3" r="3" fill="#f59e0b"/><text x="188.0" y="133.3" fill="#f59e0b" font-size="9" text-anchor="middle">19%</text><circle cx="242.4" cy="135.1" r="3" fill="#f59e0b"/><text x="242.4" y="128.1" fill="#f59e0b" font-size="9" text-anchor="middle">22%</text><circle cx="296.8" cy="130.5" r="3" fill="#f59e0b"/><text x="296.8" y="123.5" fill="#f59e0b" font-size="9" text-anchor="middle">25%</text><circle cx="351.2" cy="126.4" r="3" fill="#f59e0b"/><text x="351.2" y="119.4" fill="#f59e0b" font-size="9" text-anchor="middle">28%</text><circle cx="405.6" cy="123.1" r="3" fill="#f59e0b"/><text x="405.6" y="116.1" fill="#f59e0b" font-size="9" text-anchor="middle">30%</text><circle cx="460.0" cy="120.0" r="3" fill="#f59e0b"/><text x="460.0" y="113.0" fill="#f59e0b" font-size="9" text-anchor="middle">32%</text><circle cx="514.4" cy="116.8" r="3" fill="#f59e0b"/><text x="514.4" y="109.8" fill="#f59e0b" font-size="9" text-anchor="middle">34%</text><circle cx="568.8" cy="113.9" r="3" fill="#f59e0b"/><text x="568.8" y="106.9" fill="#f59e0b" font-size="9" text-anchor="middle">36%</text><text x="79.2" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 79.2 182)">Chemex-Chemical & Hy…</text><text x="133.6" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 133.6 182)">Sterling Perfumes In…</text><text x="188.0" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 188.0 182)">Henkel Lubricants/ S…</text><text x="242.4" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 242.4 182)">Class Perfumes</text><text x="296.8" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 296.8 182)">Fayfa Chemicals</text><text x="351.2" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 351.2 182)">Al Basma Detergents …</text><text x="405.6" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 405.6 182)">Sunlube Lubricants/ …</text><text x="460.0" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 460.0 182)">Tetra Gulf/ Solution…</text><text x="514.4" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 514.4 182)">Rapid Detergents & D…</text><text x="568.8" y="182" fill="#a1a1aa" font-size="9" text-anchor="end" transform="rotate(-40 568.8 182)">Biotechnology Intern…</text></svg>
+    <p class="sub">Enables: "revenue at risk if we lose account X", HHI concentration score, and a key-accounts watch list.</p>
+  </div>
+
+  <h2><span class="n">5</span> New vs returning revenue by year</h2>
+  <div class="card">
+    <svg viewBox="0 0 640 220" class="chart"><line x1="46" y1="192" x2="628" y2="192" stroke="#27272a"/><text x="40" y="195" fill="#71717a" font-size="9" text-anchor="end">0.0M</text><line x1="46" y1="147" x2="628" y2="147" stroke="#27272a"/><text x="40" y="150" fill="#71717a" font-size="9" text-anchor="end">2.1M</text><line x1="46" y1="102" x2="628" y2="102" stroke="#27272a"/><text x="40" y="105" fill="#71717a" font-size="9" text-anchor="end">4.2M</text><line x1="46" y1="57" x2="628" y2="57" stroke="#27272a"/><text x="40" y="60" fill="#71717a" font-size="9" text-anchor="end">6.3M</text><line x1="46" y1="12" x2="628" y2="12" stroke="#27272a"/><text x="40" y="15" fill="#71717a" font-size="9" text-anchor="end">8.4M</text><rect x="54.5" y="192.0" width="27.8" height="0.0" fill="#6366f1" rx="2"/><rect x="54.5" y="176.7" width="27.8" height="15.3" fill="#10b981" rx="2"/><text x="68.4" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'09</text><rect x="99.3" y="170.7" width="27.8" height="21.3" fill="#6366f1" rx="2"/><rect x="99.3" y="154.6" width="27.8" height="16.0" fill="#10b981" rx="2"/><text x="113.2" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'10</text><rect x="144.0" y="147.1" width="27.8" height="44.9" fill="#6366f1" rx="2"/><rect x="144.0" y="137.8" width="27.8" height="9.4" fill="#10b981" rx="2"/><text x="157.9" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'11</text><rect x="188.8" y="134.4" width="27.8" height="57.6" fill="#6366f1" rx="2"/><rect x="188.8" y="128.7" width="27.8" height="5.7" fill="#10b981" rx="2"/><text x="202.7" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'12</text><rect x="233.6" y="116.3" width="27.8" height="75.7" fill="#6366f1" rx="2"/><rect x="233.6" y="109.6" width="27.8" height="6.7" fill="#10b981" rx="2"/><text x="247.5" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'13</text><rect x="278.4" y="114.5" width="27.8" height="77.5" fill="#6366f1" rx="2"/><rect x="278.4" y="107.8" width="27.8" height="6.7" fill="#10b981" rx="2"/><text x="292.2" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'14</text><rect x="323.1" y="127.6" width="27.8" height="64.4" fill="#6366f1" rx="2"/><rect x="323.1" y="117.6" width="27.8" height="10.0" fill="#10b981" rx="2"/><text x="337.0" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'15</text><rect x="367.9" y="101.0" width="27.8" height="91.0" fill="#6366f1" rx="2"/><rect x="367.9" y="93.7" width="27.8" height="7.3" fill="#10b981" rx="2"/><text x="381.8" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'16</text><rect x="412.7" y="63.9" width="27.8" height="128.1" fill="#6366f1" rx="2"/><rect x="412.7" y="57.6" width="27.8" height="6.2" fill="#10b981" rx="2"/><text x="426.5" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'17</text><rect x="457.4" y="90.7" width="27.8" height="101.3" fill="#6366f1" rx="2"/><rect x="457.4" y="82.8" width="27.8" height="7.9" fill="#10b981" rx="2"/><text x="471.3" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'18</text><rect x="502.2" y="61.4" width="27.8" height="130.6" fill="#6366f1" rx="2"/><rect x="502.2" y="40.5" width="27.8" height="20.9" fill="#10b981" rx="2"/><text x="516.1" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'19</text><rect x="547.0" y="41.7" width="27.8" height="150.3" fill="#6366f1" rx="2"/><rect x="547.0" y="28.4" width="27.8" height="13.3" fill="#10b981" rx="2"/><text x="560.8" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'20</text><rect x="591.7" y="127.3" width="27.8" height="64.7" fill="#6366f1" rx="2"/><rect x="591.7" y="121.9" width="27.8" height="5.4" fill="#10b981" rx="2"/><text x="605.6" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'21</text></svg>
+    <div class="legend"><span><i style="background:var(--em)"></i>New customer revenue</span><span><i style="background:var(--in)"></i>Returning customer revenue</span></div>
+    <p class="sub">New-customer revenue is only ~8% in most years — this is a <b>retention-driven business</b>, which makes the churn board (section 7) the highest-value addition.</p>
+  </div>
+
+  <h2><span class="n">6</span> Average price per KG — a metric you can't compute today</h2>
+  <div class="card">
+    <svg viewBox="0 0 640 200" class="chart"><line x1="52" y1="174" x2="628" y2="174" stroke="#27272a"/><text x="46" y="177" fill="#71717a" font-size="9" text-anchor="end">59</text><line x1="52" y1="133.5" x2="628" y2="133.5" stroke="#27272a"/><text x="46" y="136.5" fill="#71717a" font-size="9" text-anchor="end">79</text><line x1="52" y1="93" x2="628" y2="93" stroke="#27272a"/><text x="46" y="96" fill="#71717a" font-size="9" text-anchor="end">99</text><line x1="52" y1="52.5" x2="628" y2="52.5" stroke="#27272a"/><text x="46" y="55.5" fill="#71717a" font-size="9" text-anchor="end">118</text><line x1="52" y1="12" x2="628" y2="12" stroke="#27272a"/><text x="46" y="15" fill="#71717a" font-size="9" text-anchor="end">138</text><polyline points="52.0,127.1 100.0,42.7 148.0,37.7 196.0,72.2 244.0,137.7 292.0,160.6 340.0,104.7 388.0,113.4 436.0,89.3 484.0,155.6 532.0,112.8 580.0,135.3 628.0,130.7" fill="none" stroke="#06b6d4" stroke-width="2.5"/><circle cx="52.0" cy="127.1" r="3" fill="#06b6d4"/><circle cx="100.0" cy="42.7" r="3" fill="#06b6d4"/><circle cx="148.0" cy="37.7" r="3" fill="#06b6d4"/><circle cx="196.0" cy="72.2" r="3" fill="#06b6d4"/><circle cx="244.0" cy="137.7" r="3" fill="#06b6d4"/><circle cx="292.0" cy="160.6" r="3" fill="#06b6d4"/><circle cx="340.0" cy="104.7" r="3" fill="#06b6d4"/><circle cx="388.0" cy="113.4" r="3" fill="#06b6d4"/><circle cx="436.0" cy="89.3" r="3" fill="#06b6d4"/><circle cx="484.0" cy="155.6" r="3" fill="#06b6d4"/><circle cx="532.0" cy="112.8" r="3" fill="#06b6d4"/><circle cx="580.0" cy="135.3" r="3" fill="#06b6d4"/><circle cx="628.0" cy="130.7" r="3" fill="#06b6d4"/><text x="52.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'09</text><text x="100.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'10</text><text x="148.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'11</text><text x="196.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'12</text><text x="244.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'13</text><text x="292.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'14</text><text x="340.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'15</text><text x="388.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'16</text><text x="436.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'17</text><text x="484.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'18</text><text x="532.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'19</text><text x="580.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'20</text><text x="628.0" y="192" fill="#a1a1aa" font-size="10" text-anchor="middle">'21</text></svg>
+    <p class="sub">Revenue ÷ weight, by year (AED/KG). Dips in 2013–14 (~AED 66–77) vs peaks in 2010–11 (~AED 124) point to mix shift or discounting. Drill this by SKU and customer to catch price erosion.</p>
+  </div>
+
+  <h2><span class="n">7</span> Customer lifecycle &amp; churn</h2>
+  <div class="card">
+    <div class="grid g4" style="margin-bottom:6px">
+      <div class="kpi"><div class="l">Acquired 2020</div><div class="v">70</div><div class="h">newest cohort</div></div>
+      <div class="kpi"><div class="l">Active in 2021</div><div class="v">203</div><div class="h">ordered Jan–May '21</div></div>
+      <div class="kpi"><div class="l">At risk</div><div class="v">101</div><div class="h">last order 2020, AED 5.56M</div></div>
+      <div class="kpi"><div class="l">Churned</div><div class="v">264</div><div class="h">no order since ≤2019, AED 10.42M lifetime</div></div>
+    </div>
+    <p class="lead">Customers acquired per year (from <code>First Year Supplied</code>):</p>
+    <svg viewBox="0 0 640 220" class="chart"><line x1="46" y1="192" x2="628" y2="192" stroke="#27272a"/><text x="40" y="195" fill="#71717a" font-size="9" text-anchor="end">0</text><line x1="46" y1="147" x2="628" y2="147" stroke="#27272a"/><text x="40" y="150" fill="#71717a" font-size="9" text-anchor="end">21</text><line x1="46" y1="102" x2="628" y2="102" stroke="#27272a"/><text x="40" y="105" fill="#71717a" font-size="9" text-anchor="end">41</text><line x1="46" y1="57" x2="628" y2="57" stroke="#27272a"/><text x="40" y="60" fill="#71717a" font-size="9" text-anchor="end">62</text><line x1="46" y1="12" x2="628" y2="12" stroke="#27272a"/><text x="40" y="15" fill="#71717a" font-size="9" text-anchor="end">83</text><rect x="54.5" y="111.3" width="27.8" height="80.7" fill="#a855f7" rx="2"/><text x="68.4" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'09</text><rect x="99.3" y="135.3" width="27.8" height="56.7" fill="#a855f7" rx="2"/><text x="113.2" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'10</text><rect x="144.0" y="120.0" width="27.8" height="72.0" fill="#a855f7" rx="2"/><text x="157.9" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'11</text><rect x="188.8" y="146.2" width="27.8" height="45.8" fill="#a855f7" rx="2"/><text x="202.7" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'12</text><rect x="233.6" y="120.0" width="27.8" height="72.0" fill="#a855f7" rx="2"/><text x="247.5" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'13</text><rect x="278.4" y="128.7" width="27.8" height="63.3" fill="#a855f7" rx="2"/><text x="292.2" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'14</text><rect x="323.1" y="67.6" width="27.8" height="124.4" fill="#a855f7" rx="2"/><text x="337.0" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'15</text><rect x="367.9" y="82.9" width="27.8" height="109.1" fill="#a855f7" rx="2"/><text x="381.8" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'16</text><rect x="412.7" y="85.1" width="27.8" height="106.9" fill="#a855f7" rx="2"/><text x="426.5" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'17</text><rect x="457.4" y="80.7" width="27.8" height="111.3" fill="#a855f7" rx="2"/><text x="471.3" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'18</text><rect x="502.2" y="28.4" width="27.8" height="163.6" fill="#a855f7" rx="2"/><text x="516.1" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'19</text><rect x="547.0" y="39.3" width="27.8" height="152.7" fill="#a855f7" rx="2"/><text x="560.8" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'20</text><rect x="591.7" y="111.3" width="27.8" height="80.7" fill="#a855f7" rx="2"/><text x="605.6" y="210" fill="#a1a1aa" font-size="10" text-anchor="middle">'21</text></svg>
+    <p class="sub">Cohort retention curves, reactivation tracking, and a "win-back" target list all become possible with first/last-year fields.</p>
+  </div>
+
+  <h2><span class="n">8</span> SKU roll-up (Product Code)</h2>
+  <div class="card">
+    <p class="lead"><b>998</b> distinct SKU codes vs <b>1,145</b> raw product-name spellings — <b>175</b> codes appear under 2+ different names. Grouping by code fixes double-counting in "top products".</p>
+    <table>
+      <tr><th>Code</th><th>Name</th><th class="num">Name variants</th><th class="num">Volume</th><th class="num">Revenue</th></tr>
+      <tr><td><code>A232126</code></td><td>Lavender</td><td class="num">2</td><td class="num">61,389 kg</td><td class="num">AED 5.96M</td></tr><tr><td><code>A240864</code></td><td>One In A Million</td><td class="num">3</td><td class="num">10,106 kg</td><td class="num">AED 2.93M</td></tr><tr><td><code>A270578</code></td><td>Flouramax</td><td class="num">4</td><td class="num">25,155 kg</td><td class="num">AED 1.42M</td></tr><tr><td><code>A233442</code></td><td>Strawberry</td><td class="num">3</td><td class="num">20,263 kg</td><td class="num">AED 1.08M</td></tr><tr><td><code>(no code) Solvent Red 234</code></td><td>Solvent Red 234</td><td class="num">1</td><td class="num">11,905 kg</td><td class="num">AED 943K</td></tr><tr><td><code>A318055</code></td><td>Green Tea</td><td class="num">1</td><td class="num">2,182 kg</td><td class="num">AED 935K</td></tr>
+    </table>
+  </div>
+
+  <h2><span class="n">9</span> Formulation catalog</h2>
+  <div class="card">
+    <div class="grid g4">
+      <div class="kpi"><div class="l">Distinct formulations</div><div class="v">111</div><div class="h">standardized list</div></div>
+      <div class="kpi"><div class="l">Products mapped</div><div class="v">266</div><div class="h">in the Formulations sheet</div></div>
+      <div class="kpi"><div class="l">Multi-formulation products</div><div class="v">95</div><div class="h">e.g. Pure / Silver / Gold</div></div>
+      <div class="kpi"><div class="l">Detail rows missing formulation</div><div class="v">84%</div><div class="h">backfill from catalog by code</div></div>
+    </div>
+    <p class="sub">Use the catalog as the source of truth; auto-fill blank per-row formulations by Product Code so the "formulation mix" chart is finally clean.</p>
+  </div>
+
+  <h2><span class="n">10</span> Partial-year run-rate projection</h2>
+  <div class="card">
+    <div class="grid g2">
+      <div class="kpi"><div class="l">2021 actual (Jan–May)</div><div class="v">AED 3.28M</div><div class="h">5 months of data</div></div>
+      <div class="kpi"><div class="l">2021 annualized run-rate</div><div class="v">AED 7.88M</div><div class="h">+2.8% vs 2020 full year</div></div>
+    </div>
+    <div class="ok">Instead of a scary −57% cliff in 2021, the dashboard shows "on track for ~AED 7.88M, roughly flat YoY" with a dashed projection segment.</div>
+  </div>
+
+  <h2><span class="n">11</span> How "add more files, software sorts accordingly" works</h2>
+  <div class="card">
+    <div class="flow">
+      <b>1. Detect</b> — match by sheet names (<code>Sales Detail</code> + expected columns). Recognised → parse the tidy sheet directly. Unrecognised → fall back to the wide-report parser or the CSV template.<br>
+      <b>2. Normalize</b> — trim whitespace; map <code>Customer→company</code>; keep <code>Product Code</code> as the SKU key; backfill blank formulations from the Formulations sheet.<br>
+      <b>3. Merge &amp; dedupe</b> — upsert on <code>(Customer, Product Code | Product, Year)</code>. Newest file wins on conflict. Overlapping year ranges are fine.<br>
+      <b>4. Extend axes</b> — a later <code>2022–2025</code> file just widens every year filter and chart automatically (already supported).<br>
+      <b>5. Source registry</b> — every row remembers which file + upload date it came from; a "Data sources" panel lists files, row counts, year coverage, and partial-year flags, with per-file remove.<br>
+      <b>6. Re-flag partials</b> — each file carries its own "thru &lt;month&gt;" marker so run-rate logic stays correct as data grows.
+    </div>
+  </div>
+
+  <h2><span class="n">12</span> Proposed additions — priority order</h2>
+  <div class="card">
+    <ul class="chk">
+      <li>SKU roll-up: group by Product Code, collapse 175 codes that have multiple name spellings</li><li>Price analytics: AED/KG by SKU, customer, year — flag price erosion (e.g. 2014 dipped to AED 66/kg)</li><li>Customer cohorts & retention curve by acquisition year</li><li>Churn board: 264 churned (AED 10.42M lifetime) + 101 at-risk (AED 5.56M)</li><li>New vs returning revenue split per year (new is only ~8% most years — retention-driven business)</li><li>Customer concentration: top 5 = 25.0%, top 10 = 35.5% of revenue; HHI + "what if we lose account X"</li><li>Cross-sell targets: 112 customers buy only 1 SKU (avg is 9.8)</li><li>Partial-year run-rate: 2021 actual AED 3.28M → projected AED 7.88M (+2.8% vs 2020)</li><li>VAT audit: effective rate is 4.2% not 5% → Incl-VAT column is partially populated (data-quality flag)</li><li>Not possible yet (would need richer files): month/seasonality, salesman, channel, cost/margin, region</li>
+    </ul>
+  </div>
+
+  <p class="foot">Generated 2026-09-10 from Captain&CO_Sales_2009-2021_Cleaned.xlsx · 8,914 transaction rows · review draft, not production</p>
+</div>
+</body>
+</html>
