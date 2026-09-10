@@ -21,7 +21,12 @@ import {
   Menu,
   X,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  Receipt,
+  Scale,
+  Tag,
+  UserX,
+  AlertTriangle
 } from 'lucide-react';
 import { Line, Bar, Pie } from 'react-chartjs-2';
 import * as XLSX from 'xlsx';
@@ -436,6 +441,169 @@ export default function App() {
       allProductNames: Object.keys(productMap)
     };
   }, [transactions]);
+
+  // Enhanced analytics — SKU roll-up, customer lifecycle / churn, price-per-KG,
+  // concentration (Pareto), new-vs-returning revenue, VAT, partial-year run-rate.
+  const enhancedStats = useMemo(() => {
+    const meta = compiledData.metadata || {};
+    const partialYears = meta.partialYears || {};
+    const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, oct:10, nov:11, dec:12 };
+
+    const yrs = [...new Set(transactions.map(t => t.year))].sort((a, b) => a - b);
+    const maxYear = yrs[yrs.length - 1];
+
+    let vatCollected = 0;
+    const skuMap = {};                 // productCode|name -> rollup
+    const custFirst = {}, custLast = {}, custRev = {};
+    const salesByYear = {}, qtyByYear = {};
+    yrs.forEach(y => { salesByYear[y] = 0; qtyByYear[y] = 0; });
+
+    transactions.forEach(t => {
+      const vat = (t.salesWithVat || 0) - (t.sales || 0);
+      if (vat > 0.01) vatCollected += vat;
+
+      salesByYear[t.year] += t.sales;
+      qtyByYear[t.year] += t.qty;
+
+      const key = t.productCode || ('name:' + t.product);
+      if (!skuMap[key]) skuMap[key] = { code: t.productCode || null, primaryName: t.product, names: new Set(), qty: 0, sales: 0 };
+      skuMap[key].names.add(t.product);
+      skuMap[key].qty += t.qty;
+      skuMap[key].sales += t.sales;
+
+      if (custFirst[t.company] == null || t.year < custFirst[t.company]) custFirst[t.company] = t.year;
+      if (custLast[t.company] == null || t.year > custLast[t.company]) custLast[t.company] = t.year;
+      custRev[t.company] = (custRev[t.company] || 0) + t.sales;
+    });
+
+    // SKU roll-up
+    const skuRollup = Object.values(skuMap)
+      .map(s => ({ ...s, nameVariants: s.names.size, names: undefined }))
+      .sort((a, b) => b.sales - a.sales);
+    const skuMultiName = skuRollup.filter(s => s.nameVariants > 1).length;
+
+    // Customer lifecycle
+    const allCust = Object.keys(custFirst);
+    const churned = allCust.filter(c => custLast[c] <= maxYear - 2);
+    const atRisk = allCust.filter(c => custLast[c] === maxYear - 1);
+    const activeNow = allCust.filter(c => custLast[c] === maxYear);
+    const churnLost = churned.reduce((s, c) => s + (custRev[c] || 0), 0);
+    const revenueAtRisk = atRisk.reduce((s, c) => s + (custRev[c] || 0), 0);
+    const acquiredByYear = {};
+    yrs.forEach(y => acquiredByYear[y] = 0);
+    allCust.forEach(c => { if (acquiredByYear[custFirst[c]] != null) acquiredByYear[custFirst[c]]++; });
+    const churnTable = [...churned, ...atRisk]
+      .map(c => ({ name: c, firstYear: custFirst[c], lastYear: custLast[c], revenue: custRev[c] || 0, status: custLast[c] <= maxYear - 2 ? 'churned' : 'at-risk' }))
+      .sort((a, b) => b.revenue - a.revenue);
+
+    // New vs returning revenue
+    const newVsReturning = yrs.map(y => {
+      let neu = 0, ret = 0;
+      transactions.forEach(t => {
+        if (t.year !== y) return;
+        if (custFirst[t.company] === y) neu += t.sales; else ret += t.sales;
+      });
+      return { year: y, neu, ret };
+    });
+
+    // Concentration / Pareto
+    const sortedCust = Object.entries(custRev).sort((a, b) => b[1] - a[1]);
+    const totalRev = sortedCust.reduce((s, x) => s + x[1], 0) || 1;
+    let cum = 0;
+    const pareto = sortedCust.slice(0, 10).map(([name, rev]) => { cum += rev; return { name, rev, cumPct: cum / totalRev * 100 }; });
+    const top5pct = sortedCust.slice(0, 5).reduce((s, x) => s + x[1], 0) / totalRev * 100;
+    const top10pct = sortedCust.slice(0, 10).reduce((s, x) => s + x[1], 0) / totalRev * 100;
+    const hhi = sortedCust.reduce((s, [, v]) => s + Math.pow(v / totalRev * 100, 2), 0);
+
+    // Price per KG
+    const grandSales = Object.values(salesByYear).reduce((s, v) => s + v, 0);
+    const grandQty = Object.values(qtyByYear).reduce((s, v) => s + v, 0);
+    const perKgByYear = yrs.map(y => ({ year: y, perKg: qtyByYear[y] ? salesByYear[y] / qtyByYear[y] : 0 }));
+    const avgPerKg = grandQty ? grandSales / grandQty : 0;
+
+    // Partial-year run-rate
+    const runRates = {};
+    Object.entries(partialYears).forEach(([yStr, monthName]) => {
+      const y = +yStr;
+      const months = MONTHS[String(monthName).slice(0, 3).toLowerCase()] || 12;
+      const actual = salesByYear[y] || 0;
+      runRates[y] = { monthName, months, actual, projected: months ? actual * 12 / months : actual };
+    });
+
+    return {
+      partialYears, runRates, maxYear,
+      vatCollected, avgPerKg, perKgByYear,
+      skuRollup, skuCount: skuRollup.length, skuMultiName,
+      rawProductNames: new Set(transactions.map(t => t.product)).size,
+      churnedCount: churned.length, atRiskCount: atRisk.length, activeCount: activeNow.length,
+      churnLost, revenueAtRisk, acquiredByYear, churnTable,
+      newVsReturning, pareto, top5pct, top10pct, hhi,
+      formulationCatalog: compiledData.formulationCatalog || [],
+    };
+  }, [transactions]);
+
+  // ---- Chart data for the Customers / Products tabs ----
+  const chartAxis = { color: '#a1a1aa', font: { family: 'Outfit', size: 10 } };
+  const gridSoft = { color: 'rgba(63,63,70,0.15)' };
+  const baseChartOpts = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } };
+
+  const paretoChartData = useMemo(() => ({
+    labels: enhancedStats.pareto.map(p => p.name.length > 18 ? p.name.slice(0, 16) + '…' : p.name),
+    datasets: [
+      { type: 'bar', label: 'Lifetime revenue', data: enhancedStats.pareto.map(p => p.rev), backgroundColor: 'rgba(99,102,241,0.8)', borderRadius: 4, yAxisID: 'y', order: 2 },
+      { type: 'line', label: 'Cumulative %', data: enhancedStats.pareto.map(p => p.cumPct), borderColor: '#f59e0b', backgroundColor: '#f59e0b', borderWidth: 2, tension: 0.3, yAxisID: 'y1', order: 1, pointRadius: 3 },
+    ],
+  }), [enhancedStats]);
+
+  const paretoChartOpts = {
+    ...baseChartOpts,
+    plugins: { legend: { display: true, position: 'top', labels: { color: '#fafafa', font: { family: 'Outfit', size: 11 } } } },
+    scales: {
+      x: { grid: { display: false }, ticks: { ...chartAxis, maxRotation: 55, minRotation: 45 } },
+      y: { position: 'left', grid: gridSoft, ticks: { ...chartAxis, callback: v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v } },
+      y1: { position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false }, ticks: { color: '#f59e0b', font: { family: 'Outfit', size: 10 }, callback: v => v + '%' } },
+    },
+  };
+
+  const newVsReturningChartData = useMemo(() => ({
+    labels: enhancedStats.newVsReturning.map(d => d.year),
+    datasets: [
+      { label: 'Returning', data: enhancedStats.newVsReturning.map(d => d.ret), backgroundColor: 'rgba(99,102,241,0.8)', borderRadius: 3, stack: 's' },
+      { label: 'New', data: enhancedStats.newVsReturning.map(d => d.neu), backgroundColor: 'rgba(16,185,129,0.85)', borderRadius: 3, stack: 's' },
+    ],
+  }), [enhancedStats]);
+
+  const stackedBarOpts = {
+    ...baseChartOpts,
+    plugins: { legend: { display: true, position: 'top', labels: { color: '#fafafa', font: { family: 'Outfit', size: 11 } } } },
+    scales: {
+      x: { stacked: true, grid: { display: false }, ticks: chartAxis },
+      y: { stacked: true, grid: gridSoft, ticks: { ...chartAxis, callback: v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v } },
+    },
+  };
+
+  const priceKgChartData = useMemo(() => ({
+    labels: enhancedStats.perKgByYear.map(d => d.year),
+    datasets: [
+      { label: 'AED / KG', data: enhancedStats.perKgByYear.map(d => d.perKg), borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,0.15)', borderWidth: 2.5, tension: 0.3, fill: true, pointRadius: 3 },
+    ],
+  }), [enhancedStats]);
+
+  const acqChartData = useMemo(() => {
+    const ys = Object.keys(enhancedStats.acquiredByYear).sort();
+    return {
+      labels: ys,
+      datasets: [{ label: 'New customers', data: ys.map(y => enhancedStats.acquiredByYear[y]), backgroundColor: 'rgba(168,85,247,0.8)', borderRadius: 3 }],
+    };
+  }, [enhancedStats]);
+
+  const simpleBarLineOpts = {
+    ...baseChartOpts,
+    scales: {
+      x: { grid: { display: false }, ticks: chartAxis },
+      y: { grid: gridSoft, ticks: { ...chartAxis, callback: v => v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v } },
+    },
+  };
 
   // Process table data (Search + Filters + Sort)
   const filteredAndSortedTransactions = useMemo(() => {
@@ -1332,10 +1500,10 @@ Answer the user's question accurately using the data above. Be direct, professio
                   <FileSpreadsheet size={18} />
                 </div>
                 <div className="file-details">
-                  <div className="file-name" title="Historical Report 2009-2021 (1).xls">
-                    Historical Report 2009-2021 (1).xls
+                  <div className="file-name" title={compiledData.metadata?.sourceFile || 'dataset'}>
+                    {compiledData.metadata?.sourceFile || 'Historical dataset'}
                   </div>
-                  <div className="file-size">8.25 MB • 49,442 Rows loaded</div>
+                  <div className="file-size">{globalStats.companyCount} customers • {(compiledData.metadata?.transactionCount || transactions.length).toLocaleString()} transaction rows</div>
                 </div>
               </div>
               <p className="help-text">
@@ -1510,8 +1678,8 @@ Answer the user's question accurately using the data above. Be direct, professio
               </button>
             )}
             <div className="header-title" style={{ flex: 1 }}>
-              <h2>Historical Report (2009 - 2021)</h2>
-              <p>Corporate Sales Summary & Data Intelligence Dashboard</p>
+              <h2>Sales Analytics ({compiledData.metadata?.yearMin || 2009} – {compiledData.metadata?.yearMax || 2021})</h2>
+              <p>Enhanced build · customers, SKUs, lifecycle &amp; pricing intelligence</p>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
               <span className="badge-year" style={{ padding: '8px 14px', fontSize: '0.85rem' }}>
@@ -1531,13 +1699,25 @@ Answer the user's question accurately using the data above. Be direct, professio
           </div>
 
           <nav className="tabs">
-            <button 
+            <button
               className={`tab-btn ${activeTab === 'overview' ? 'active' : ''}`}
               onClick={() => setActiveTab('overview')}
             >
               Overview Dashboard
             </button>
-            <button 
+            <button
+              className={`tab-btn ${activeTab === 'customers' ? 'active' : ''}`}
+              onClick={() => setActiveTab('customers')}
+            >
+              Customers
+            </button>
+            <button
+              className={`tab-btn ${activeTab === 'products' ? 'active' : ''}`}
+              onClick={() => setActiveTab('products')}
+            >
+              Products / SKUs
+            </button>
+            <button
               className={`tab-btn ${activeTab === 'table' ? 'active' : ''}`}
               onClick={() => setActiveTab('table')}
             >
@@ -1648,29 +1828,39 @@ Answer the user's question accurately using the data above. Be direct, professio
               {/* Stats Cards */}
               <div className="stats-grid">
                 <div className="stats-card">
-                  <div className="stats-icon-box">
-                    <TrendingUp size={24} />
-                  </div>
+                  <div className="stats-icon-box"><TrendingUp size={22} /></div>
                   <div className="stats-info">
-                    <span className="stats-label">Total Revenue</span>
+                    <span className="stats-label">Net Revenue (ex VAT)</span>
                     <span className="stats-value">{formatCurrency(overviewStats.totalSalesAED)}</span>
                   </div>
                 </div>
 
                 <div className="stats-card">
-                  <div className="stats-icon-box cyan">
-                    <Layers size={24} />
-                  </div>
+                  <div className="stats-icon-box emerald"><Receipt size={22} /></div>
                   <div className="stats-info">
-                    <span className="stats-label">Units Sold</span>
-                    <span className="stats-value">{formatNumber(overviewStats.totalQty)}</span>
+                    <span className="stats-label">VAT Collected</span>
+                    <span className="stats-value">{formatCurrency(enhancedStats.vatCollected)}</span>
                   </div>
                 </div>
 
                 <div className="stats-card">
-                  <div className="stats-icon-box purple">
-                    <Users size={24} />
+                  <div className="stats-icon-box cyan"><Layers size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Total Volume</span>
+                    <span className="stats-value">{formatNumber(overviewStats.totalQty)} kg</span>
                   </div>
+                </div>
+
+                <div className="stats-card">
+                  <div className="stats-icon-box"><Scale size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Avg Price / KG</span>
+                    <span className="stats-value">AED {enhancedStats.avgPerKg.toFixed(1)}</span>
+                  </div>
+                </div>
+
+                <div className="stats-card">
+                  <div className="stats-icon-box purple"><Users size={22} /></div>
                   <div className="stats-info">
                     <span className="stats-label">Active Customers</span>
                     <span className="stats-value">{overviewStats.companyCount}</span>
@@ -1678,15 +1868,38 @@ Answer the user's question accurately using the data above. Be direct, professio
                 </div>
 
                 <div className="stats-card">
-                  <div className="stats-icon-box emerald">
-                    <FileSpreadsheet size={24} />
-                  </div>
+                  <div className="stats-icon-box"><Tag size={22} /></div>
                   <div className="stats-info">
-                    <span className="stats-label">Total Products</span>
-                    <span className="stats-value">{overviewStats.productCount}</span>
+                    <span className="stats-label">Distinct SKUs</span>
+                    <span className="stats-value">{enhancedStats.skuCount}</span>
+                  </div>
+                </div>
+
+                <div className="stats-card">
+                  <div className="stats-icon-box purple"><UserX size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Churned Customers</span>
+                    <span className="stats-value">{enhancedStats.churnedCount}</span>
+                  </div>
+                </div>
+
+                <div className="stats-card">
+                  <div className="stats-icon-box emerald"><AlertTriangle size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Revenue at Risk</span>
+                    <span className="stats-value">{formatCurrency(enhancedStats.revenueAtRisk)}</span>
                   </div>
                 </div>
               </div>
+
+              {compiledData.metadata && compiledData.metadata.partialYears && Object.keys(compiledData.metadata.partialYears).length > 0 && (
+                <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', padding: '10px 14px', borderRadius: 'var(--border-radius-sm)', border: '1px solid rgba(245,158,11,0.25)', backgroundColor: 'rgba(245,158,11,0.08)' }}>
+                  <AlertTriangle size={13} style={{ verticalAlign: '-2px', marginRight: '6px', color: '#f59e0b' }} />
+                  {Object.entries(enhancedStats.runRates).map(([y, rr]) =>
+                    `${y} is a partial year (data thru ${rr.monthName}). Actual ${formatCurrency(rr.actual)} → annualized run-rate ≈ ${formatCurrency(rr.projected)}.`
+                  ).join(' ')}
+                </div>
+              )}
 
               {/* Main Charts Row */}
               <div className="dashboard-row">
@@ -1774,8 +1987,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                       <tr>
                         <th style={{ cursor: 'default' }}>Rank</th>
                         <th style={{ cursor: 'default' }}>Company Name</th>
-                        <th style={{ cursor: 'default' }}>Ref Code</th>
-                        <th style={{ cursor: 'default', textTransform: 'none' }}>Total Volume (Qty)</th>
+                        <th style={{ cursor: 'default', textTransform: 'none' }}>Total Volume (kg)</th>
                         <th style={{ cursor: 'default', textTransform: 'none' }}>Total Revenue (AED)</th>
                       </tr>
                     </thead>
@@ -1784,11 +1996,218 @@ Answer the user's question accurately using the data above. Be direct, professio
                         <tr key={i}>
                           <td><strong>#{i + 1}</strong></td>
                           <td className="td-company">{c.name}</td>
-                          <td>{c.ref || 'N/A'}</td>
                           <td>{c.totalQty.toLocaleString(undefined, {maximumFractionDigits: 0})}</td>
                           <td><span className="badge-year">{c.totalSales.toLocaleString()} AED</span></td>
                         </tr>
                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* CUSTOMERS */}
+          {activeTab === 'customers' && (
+            <div className="tab-panel">
+              <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+                <div className="stats-card">
+                  <div className="stats-icon-box purple"><Users size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Active in {enhancedStats.maxYear}</span>
+                    <span className="stats-value">{enhancedStats.activeCount}</span>
+                  </div>
+                </div>
+                <div className="stats-card">
+                  <div className="stats-icon-box emerald"><AlertTriangle size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">At Risk ({formatCurrency(enhancedStats.revenueAtRisk)})</span>
+                    <span className="stats-value">{enhancedStats.atRiskCount}</span>
+                  </div>
+                </div>
+                <div className="stats-card">
+                  <div className="stats-icon-box purple"><UserX size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Churned ({formatCurrency(enhancedStats.churnLost)} lifetime)</span>
+                    <span className="stats-value">{enhancedStats.churnedCount}</span>
+                  </div>
+                </div>
+                <div className="stats-card">
+                  <div className="stats-icon-box"><TrendingUp size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Top 5 / Top 10 concentration</span>
+                    <span className="stats-value">{enhancedStats.top5pct.toFixed(0)}% / {enhancedStats.top10pct.toFixed(0)}%</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="dashboard-row">
+                <div className="visual-card">
+                  <div className="visual-card-header">
+                    <span className="visual-card-title">Customer concentration (Pareto)</span>
+                  </div>
+                  <div style={{ flex: 1, position: 'relative', height: '320px' }}>
+                    <Bar key={`pareto-${chartLayoutKey}`} data={paretoChartData} options={paretoChartOpts} />
+                  </div>
+                </div>
+                <div className="visual-card">
+                  <div className="visual-card-header">
+                    <span className="visual-card-title">New customers acquired per year</span>
+                  </div>
+                  <div style={{ flex: 1, position: 'relative', height: '320px' }}>
+                    <Bar key={`acq-${chartLayoutKey}`} data={acqChartData} options={simpleBarLineOpts} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="visual-card">
+                <div className="visual-card-header">
+                  <span className="visual-card-title">New vs returning revenue by year</span>
+                </div>
+                <div style={{ flex: 1, position: 'relative', height: '300px' }}>
+                  <Bar key={`nvr-${chartLayoutKey}`} data={newVsReturningChartData} options={stackedBarOpts} />
+                </div>
+                <p className="help-text">New-customer revenue is a small share most years — this is a retention-driven book, so the churn / win-back list below is where the leverage is.</p>
+              </div>
+
+              <div className="visual-card" style={{ minHeight: '200px' }}>
+                <div className="visual-card-header">
+                  <span className="visual-card-title">Churn &amp; win-back list — {enhancedStats.churnTable.length} customers, ranked by lifetime revenue</span>
+                </div>
+                <div className="table-wrapper">
+                  <table style={{ minWidth: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ cursor: 'default' }}>Customer</th>
+                        <th style={{ cursor: 'default' }}>Status</th>
+                        <th style={{ cursor: 'default' }}>First year</th>
+                        <th style={{ cursor: 'default' }}>Last year</th>
+                        <th style={{ cursor: 'default', textTransform: 'none' }}>Lifetime revenue (AED)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {enhancedStats.churnTable.slice(0, 60).map((c, i) => (
+                        <tr key={i}>
+                          <td className="td-company" title={c.name}>{c.name}</td>
+                          <td>
+                            <span className="badge-formulation" style={{ backgroundColor: c.status === 'churned' ? 'rgba(239,68,68,0.12)' : 'rgba(245,158,11,0.14)', color: c.status === 'churned' ? '#f87171' : '#f59e0b' }}>
+                              {c.status}
+                            </span>
+                          </td>
+                          <td>{c.firstYear}</td>
+                          <td>{c.lastYear}</td>
+                          <td><strong>{Math.round(c.revenue).toLocaleString()}</strong></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {enhancedStats.churnTable.length > 60 && (
+                  <p className="help-text">Showing top 60 by revenue. HHI concentration index: {Math.round(enhancedStats.hhi)} (below 1,500 = unconcentrated).</p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* PRODUCTS / SKUs */}
+          {activeTab === 'products' && (
+            <div className="tab-panel">
+              <div className="stats-grid" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }}>
+                <div className="stats-card">
+                  <div className="stats-icon-box"><Tag size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Distinct SKUs (by code)</span>
+                    <span className="stats-value">{enhancedStats.skuCount}</span>
+                  </div>
+                </div>
+                <div className="stats-card">
+                  <div className="stats-icon-box cyan"><FileSpreadsheet size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Raw product-name spellings</span>
+                    <span className="stats-value">{enhancedStats.rawProductNames}</span>
+                  </div>
+                </div>
+                <div className="stats-card">
+                  <div className="stats-icon-box emerald"><Layers size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Codes with 2+ name variants</span>
+                    <span className="stats-value">{enhancedStats.skuMultiName}</span>
+                  </div>
+                </div>
+                <div className="stats-card">
+                  <div className="stats-icon-box"><Scale size={22} /></div>
+                  <div className="stats-info">
+                    <span className="stats-label">Avg price / KG (all-time)</span>
+                    <span className="stats-value">AED {enhancedStats.avgPerKg.toFixed(1)}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="visual-card">
+                <div className="visual-card-header">
+                  <span className="visual-card-title">Average price per KG by year (revenue ÷ weight)</span>
+                </div>
+                <div style={{ flex: 1, position: 'relative', height: '300px' }}>
+                  <Line key={`pkg-${chartLayoutKey}`} data={priceKgChartData} options={simpleBarLineOpts} />
+                </div>
+              </div>
+
+              <div className="visual-card" style={{ minHeight: '200px' }}>
+                <div className="visual-card-header">
+                  <span className="visual-card-title">SKU roll-up — grouped by Product Code, top 60 by revenue</span>
+                </div>
+                <div className="table-wrapper">
+                  <table style={{ minWidth: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ cursor: 'default' }}>Code</th>
+                        <th style={{ cursor: 'default' }}>Primary name</th>
+                        <th style={{ cursor: 'default' }}>Name variants</th>
+                        <th style={{ cursor: 'default', textTransform: 'none' }}>Volume (kg)</th>
+                        <th style={{ cursor: 'default', textTransform: 'none' }}>Revenue (AED)</th>
+                        <th style={{ cursor: 'default', textTransform: 'none' }}>AED / kg</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {enhancedStats.skuRollup.slice(0, 60).map((s, i) => (
+                        <tr key={i}>
+                          <td>{s.code ? <span className="badge-year">{s.code}</span> : <span className="help-text">—</span>}</td>
+                          <td className="td-product" title={s.primaryName}>{s.primaryName}</td>
+                          <td>{s.nameVariants > 1 ? <strong>{s.nameVariants}</strong> : s.nameVariants}</td>
+                          <td>{Math.round(s.qty).toLocaleString()}</td>
+                          <td><strong>{Math.round(s.sales).toLocaleString()}</strong></td>
+                          <td>{s.qty ? (s.sales / s.qty).toFixed(1) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="visual-card" style={{ minHeight: '200px' }}>
+                <div className="visual-card-header">
+                  <span className="visual-card-title">Formulation catalog — {enhancedStats.formulationCatalog.length} products, {enhancedStats.formulationCatalog.filter(f => f.formulations.length > 1).length} with multiple formulations</span>
+                </div>
+                <div className="table-wrapper">
+                  <table style={{ minWidth: '100%' }}>
+                    <thead>
+                      <tr>
+                        <th style={{ cursor: 'default' }}>Product</th>
+                        <th style={{ cursor: 'default' }}>Code</th>
+                        <th style={{ cursor: 'default' }}>Available formulations</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {enhancedStats.formulationCatalog
+                        .filter(f => f.formulations.length > 1)
+                        .slice(0, 50)
+                        .map((f, i) => (
+                          <tr key={i}>
+                            <td className="td-product" title={f.product}>{f.product}</td>
+                            <td>{f.productCode ? <span className="badge-year">{f.productCode}</span> : <span className="help-text">—</span>}</td>
+                            <td>{f.formulations.map((x, j) => <span key={j} className="badge-formulation" style={{ marginRight: '4px' }}>{x}</span>)}</td>
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 </div>
@@ -2009,6 +2428,9 @@ Answer the user's question accurately using the data above. Be direct, professio
                         <th onClick={() => handleSort('product')}>
                           Product {sortKey === 'product' && (sortDirection === 'asc' ? '▲' : '▼')}
                         </th>
+                        <th onClick={() => handleSort('productCode')}>
+                          Code {sortKey === 'productCode' && (sortDirection === 'asc' ? '▲' : '▼')}
+                        </th>
                         <th onClick={() => handleSort('formulation')}>
                           Formulation {sortKey === 'formulation' && (sortDirection === 'asc' ? '▲' : '▼')}
                         </th>
@@ -2032,6 +2454,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                           <tr key={idx}>
                             <td className="td-company" title={t.company}>{t.company}</td>
                             <td className="td-product" title={t.product}>{t.product}</td>
+                            <td>{t.productCode ? <span className="badge-year">{t.productCode}</span> : <span className="help-text">—</span>}</td>
                             <td>
                               <span className={t.formulation === 'N/A' ? 'help-text' : 'badge-formulation'}>
                                 {t.formulation}
@@ -2045,7 +2468,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
+                          <td colSpan="8" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
                             No transaction points matched your filters.
                           </td>
                         </tr>
@@ -2054,7 +2477,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                     {filteredAndSortedTransactions.length > 0 && (
                       <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 5, backgroundColor: '#18181b' }}>
                         <tr style={{ borderTop: '2px solid var(--border-color)', fontWeight: 'bold' }}>
-                          <td colSpan="4" style={{ padding: '14px 20px', color: 'var(--text-primary)' }}>Total (Filtered)</td>
+                          <td colSpan="5" style={{ padding: '14px 20px', color: 'var(--text-primary)' }}>Total (Filtered)</td>
                           <td style={{ padding: '14px 20px', color: 'var(--accent-cyan)' }}>{filteredTotals.qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                           <td style={{ padding: '14px 20px', color: 'var(--accent-primary)' }}>{filteredTotals.sales.toLocaleString()} AED</td>
                           <td style={{ padding: '14px 20px', color: 'var(--accent-secondary)' }}>{filteredTotals.salesWithVat.toLocaleString()} AED</td>
