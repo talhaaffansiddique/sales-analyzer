@@ -676,6 +676,13 @@ body {
   outline: none;
   cursor: pointer;
   transition: var(--transition-smooth);
+  /* Some option values (e.g. formulation free-text) are very long; without a
+     cap, native <select> boxes size themselves to fit their widest option
+     and can silently blow out the surrounding flex layout on narrow screens. */
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .select-custom:focus {
