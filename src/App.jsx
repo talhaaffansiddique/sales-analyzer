@@ -218,6 +218,7 @@ const parseTidyCsvRows = (rawRows) => {
 export default function App() {
   // Authentication states
   const [isAuthenticated, setIsAuthenticated] = useState(sessionStorage.getItem('cornell_authenticated') === 'true');
+  const [loggedInUser, setLoggedInUser] = useState(sessionStorage.getItem('cornell_username') || '');
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -334,7 +335,9 @@ export default function App() {
     if (validCredentials[usernameInput] === passwordInput) {
       setIsAuthenticated(true);
       setLoginError('');
+      setLoggedInUser(usernameInput);
       sessionStorage.setItem('cornell_authenticated', 'true');
+      sessionStorage.setItem('cornell_username', usernameInput);
     } else {
       setLoginError('Invalid Username or Password');
     }
@@ -343,9 +346,11 @@ export default function App() {
   // Handle Logout
   const handleLogout = () => {
     setIsAuthenticated(false);
+    setLoggedInUser('');
     setUsernameInput('');
     setPasswordInput('');
     sessionStorage.removeItem('cornell_authenticated');
+    sessionStorage.removeItem('cornell_username');
   };
 
   // Save API Key (provider-aware: Gemini or Claude)
@@ -1505,16 +1510,14 @@ Answer the user's question accurately using the data above. Be direct, professio
               <span className="badge-year" style={{ padding: '8px 14px', fontSize: '0.85rem' }}>
                 Cornell International DMCC
               </span>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
-                <button 
-                  onClick={handleLogout}
-                  className="btn-secondary"
-                  style={{ padding: '8px 14px', fontSize: '0.85rem', cursor: 'pointer' }}
-                >
-                  Logout (Captain)
-                </button>
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>v 1.1</span>
-              </div>
+              <button
+                onClick={handleLogout}
+                className="btn-secondary"
+                style={{ padding: '8px 14px', fontSize: '0.85rem', cursor: 'pointer', whiteSpace: 'nowrap' }}
+              >
+                Logout {loggedInUser && `(${loggedInUser.charAt(0).toUpperCase() + loggedInUser.slice(1)})`}
+              </button>
+              <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>v 1.1</span>
             </div>
           </div>
 
