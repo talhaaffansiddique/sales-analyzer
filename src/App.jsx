@@ -237,7 +237,6 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState('');
   const [fromYear, setFromYear] = useState(2009);
   const [toYear, setToYear] = useState(2021);
-  const [filterFormulation, setFilterFormulation] = useState('All');
   const [selectedProducts, setSelectedProducts] = useState([]);
   const [productSearchInput, setProductSearchInput] = useState('');
   const [sortKey, setSortKey] = useState('sales');
@@ -327,7 +326,12 @@ export default function App() {
   // Handle Login authentication
   const handleLogin = (e) => {
     e.preventDefault();
-    if (usernameInput === 'captain' && passwordInput === 'talha123') {
+    const validCredentials = {
+      captain: 'talha123',
+      shreya: 'Captain123',
+      akshaya: 'Captain123',
+    };
+    if (validCredentials[usernameInput] === passwordInput) {
       setIsAuthenticated(true);
       setLoginError('');
       sessionStorage.setItem('cornell_authenticated', 'true');
@@ -367,17 +371,6 @@ export default function App() {
       }
     ]);
   };
-
-  // Get filter list options (reactive to imported/live transactions)
-  const formulationOptions = useMemo(() => {
-    const formulations = new Set();
-    transactions.forEach(t => {
-      if (t.formulation && t.formulation !== 'N/A') {
-        formulations.add(t.formulation);
-      }
-    });
-    return ['All', 'N/A', ...Array.from(formulations).sort()];
-  }, [transactions]);
 
   const uniqueProductsList = useMemo(() => {
     const productsSet = new Set();
@@ -454,11 +447,6 @@ export default function App() {
     // Filter by Year Range
     result = result.filter(t => t.year >= fromYear && t.year <= toYear);
 
-    // Filter by Formulation
-    if (filterFormulation !== 'All') {
-      result = result.filter(t => t.formulation === filterFormulation);
-    }
-
     // Filter by Selected Products (Multi-select)
     if (selectedProducts.length > 0) {
       result = result.filter(t => selectedProducts.includes(t.product));
@@ -492,7 +480,7 @@ export default function App() {
     });
 
     return result;
-  }, [transactions, searchTerm, fromYear, toYear, filterFormulation, selectedProducts, sortKey, sortDirection]);
+  }, [transactions, searchTerm, fromYear, toYear, selectedProducts, sortKey, sortDirection]);
 
   // Aggregated totals for currently filtered rows
   const filteredTotals = useMemo(() => {
@@ -1842,20 +1830,6 @@ Answer the user's question accurately using the data above. Be direct, professio
                       </select>
                     </div>
 
-                    {/* Formulation */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Formulation</span>
-                      <select 
-                        className="select-custom"
-                        value={filterFormulation}
-                        onChange={(e) => { setFilterFormulation(e.target.value); setCurrentPage(1); }}
-                      >
-                        {formulationOptions.map(f => (
-                          <option key={f} value={f}>{f}</option>
-                        ))}
-                      </select>
-                    </div>
-
                     {/* Product Multiselect Search */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', position: 'relative', minWidth: '220px' }}>
                       <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Products (Multi-select)</span>
@@ -2009,9 +1983,6 @@ Answer the user's question accurately using the data above. Be direct, professio
                         <th onClick={() => handleSort('product')}>
                           Product {sortKey === 'product' && (sortDirection === 'asc' ? '▲' : '▼')}
                         </th>
-                        <th onClick={() => handleSort('formulation')}>
-                          Formulation {sortKey === 'formulation' && (sortDirection === 'asc' ? '▲' : '▼')}
-                        </th>
                         <th onClick={() => handleSort('year')}>
                           Year {sortKey === 'year' && (sortDirection === 'asc' ? '▲' : '▼')}
                         </th>
@@ -2032,11 +2003,6 @@ Answer the user's question accurately using the data above. Be direct, professio
                           <tr key={idx}>
                             <td className="td-company" title={t.company}>{t.company}</td>
                             <td className="td-product" title={t.product}>{t.product}</td>
-                            <td>
-                              <span className={t.formulation === 'N/A' ? 'help-text' : 'badge-formulation'}>
-                                {t.formulation}
-                              </span>
-                            </td>
                             <td><span className="badge-year">{t.year}</span></td>
                             <td>{t.qty.toLocaleString()}</td>
                             <td><strong>{t.sales.toLocaleString()}</strong></td>
@@ -2045,7 +2011,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                         ))
                       ) : (
                         <tr>
-                          <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
+                          <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: 'var(--text-secondary)' }}>
                             No transaction points matched your filters.
                           </td>
                         </tr>
@@ -2054,7 +2020,7 @@ Answer the user's question accurately using the data above. Be direct, professio
                     {filteredAndSortedTransactions.length > 0 && (
                       <tfoot style={{ position: 'sticky', bottom: 0, zIndex: 5, backgroundColor: '#18181b' }}>
                         <tr style={{ borderTop: '2px solid var(--border-color)', fontWeight: 'bold' }}>
-                          <td colSpan="4" style={{ padding: '14px 20px', color: 'var(--text-primary)' }}>Total (Filtered)</td>
+                          <td colSpan="3" style={{ padding: '14px 20px', color: 'var(--text-primary)' }}>Total (Filtered)</td>
                           <td style={{ padding: '14px 20px', color: 'var(--accent-cyan)' }}>{filteredTotals.qty.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                           <td style={{ padding: '14px 20px', color: 'var(--accent-primary)' }}>{filteredTotals.sales.toLocaleString()} AED</td>
                           <td style={{ padding: '14px 20px', color: 'var(--accent-secondary)' }}>{filteredTotals.salesWithVat.toLocaleString()} AED</td>
